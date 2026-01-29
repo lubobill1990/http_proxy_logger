@@ -84,6 +84,7 @@ function getFileExtension(contentType: string | null, defaultExt: string = 'bin'
     'application/javascript': 'js',
     'application/xml': 'xml',
     'text/xml': 'xml',
+    'text/event-stream': 'txt',
     'image/jpeg': 'jpg',
     'image/png': 'png',
     'image/gif': 'gif',

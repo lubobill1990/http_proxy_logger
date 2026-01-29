@@ -1,9 +1,10 @@
-# HTTP Proxy Logger
+# HTTP Proxy Logger with Web Viewer
 
-A Node.js HTTP proxy server built with TypeScript and Hono that logs all requests and responses with detailed information.
+A Node.js HTTP proxy server built with TypeScript and Hono that logs all requests and responses, paired with a Next.js web application for viewing and analyzing the logs.
 
 ## Features
 
+### Proxy Server
 - Proxies all HTTP traffic to a configurable target host and port
 - Records all request and response headers and bodies
 - Organizes logs by minute in separate directories
@@ -13,17 +14,49 @@ A Node.js HTTP proxy server built with TypeScript and Hono that logs all request
 - Binary content (images, PDFs, etc.) saved with proper file extensions for easy viewing
 - Handles errors gracefully and logs them
 
+### Log Viewer
+- Web-based UI for browsing and analyzing logged requests
+- Time-based filtering
+- Search by method or path
+- Side-by-side request/response view
+- JSON viewer with expand/collapse functionality
+- Special parsing for Claude API SSE streams
+- Resizable JSON viewers with persistent heights
+- URL-based deep linking to specific requests
+
+## Project Structure
+
+This is a monorepo containing two applications:
+
+```
+nodeproxy/
+├── apps/
+│   ├── proxy/          # HTTP proxy server
+│   └── log-viewer/     # Next.js log viewer web app
+└── logs/               # Shared log directory
+```
+
 ## Installation
 
+Install dependencies for both applications:
+
 ```bash
-npm install
+# Install all dependencies
+npm run install:all
+
+# Or install individually
+npm run install:proxy
+npm run install:viewer
 ```
 
 ## Configuration
 
-Create a `.env` file in the root directory (copy from `.env.example`):
+### Proxy Server
+
+Create a `.env` file in `apps/proxy/` (copy from `.env.example`):
 
 ```bash
+cd apps/proxy
 cp .env.example .env
 ```
 
@@ -38,23 +71,30 @@ PROXY_PORT=8080
 TARGET_HOST=localhost
 TARGET_PORT=3000
 
-# Log directory
-LOG_DIR=logs
+# Log directory (relative to apps/proxy)
+LOG_DIR=../../logs
 ```
 
 ## Usage
 
-### Development mode (with auto-reload)
+### Run both applications
 
 ```bash
 npm run dev
 ```
 
-### Build and run in production
+This will start:
+- Proxy server on http://localhost:8080
+- Log viewer on http://localhost:3001
+
+### Run individually
 
 ```bash
-npm run build
-npm start
+# Proxy server only
+npm run dev:proxy
+
+# Log viewer only
+npm run dev:viewer
 ```
 
 ## Log Structure

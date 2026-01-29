@@ -1,24 +1,17 @@
 {
-  "name": "http-proxy-logger",
+  "name": "nodeproxy-workspace",
   "version": "1.0.0",
-  "description": "HTTP proxy that logs all requests and responses",
-  "main": "dist/index.js",
+  "description": "HTTP proxy logger with web viewer",
+  "private": true,
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
-  },
-  "keywords": ["proxy", "http", "logger"],
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "hono": "^4.0.0",
-    "@hono/node-server": "^1.8.0",
-    "dotenv": "^16.4.0"
+    "dev:proxy": "cd apps/proxy && npm run dev",
+    "dev:viewer": "cd apps/log-viewer && npm run dev",
+    "dev": "concurrently \"npm run dev:proxy\" \"npm run dev:viewer\"",
+    "install:proxy": "cd apps/proxy && npm install",
+    "install:viewer": "cd apps/log-viewer && npm install",
+    "install:all": "npm run install:proxy && npm run install:viewer"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "typescript": "^5.3.0",
-    "tsx": "^4.7.0"
+    "concurrently": "^8.2.2"
   }
 }
