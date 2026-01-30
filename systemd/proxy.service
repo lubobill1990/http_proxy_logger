@@ -1,0 +1,19 @@
+[Unit]
+Description=HTTP Proxy Logger
+After=network.target
+
+[Service]
+Type=simple
+User=bolu1
+WorkingDirectory=/c/src/nodeproxy/apps/proxy
+Environment=NODE_ENV=production
+EnvironmentFile=/c/src/nodeproxy/apps/proxy/.env
+ExecStart=/usr/bin/node /c/src/nodeproxy/apps/proxy/dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proxy
+
+[Install]
+WantedBy=multi-user.target

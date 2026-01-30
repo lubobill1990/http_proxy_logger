@@ -26,27 +26,24 @@ A Node.js HTTP proxy server built with TypeScript and Hono that logs all request
 
 ## Project Structure
 
-This is a monorepo containing two applications:
+This is a yarn workspaces monorepo containing two applications:
 
 ```
 nodeproxy/
 ├── apps/
 │   ├── proxy/          # HTTP proxy server
-│   └── log-viewer/     # Next.js log viewer web app
-└── logs/               # Shared log directory
+│   └── log-viewer/     # Next.js log viewer web app (with Turbopack)
+├── logs/               # Shared log directory
+└── systemd/            # Systemd service configurations
 ```
 
 ## Installation
 
-Install dependencies for both applications:
+This project uses yarn workspaces. Install all dependencies with a single command:
 
 ```bash
-# Install all dependencies
-npm run install:all
-
-# Or install individually
-npm run install:proxy
-npm run install:viewer
+# Install all dependencies for all workspaces
+yarn install
 ```
 
 ## Configuration
@@ -75,26 +72,74 @@ TARGET_PORT=3000
 LOG_DIR=../../logs
 ```
 
-## Usage
+### Log Viewer
 
-### Run both applications
+Create a `.env` file in `apps/log-viewer/` (copy from `.env.example`):
 
 ```bash
-npm run dev
+cd apps/log-viewer
+cp .env.example .env
+```
+
+Edit the `.env` file:
+
+```env
+# Log viewer port
+PORT=3001
+```
+
+## Usage
+
+### Development Mode
+
+Run both applications in development mode:
+
+```bash
+# Run both applications
+yarn dev
+
+# Or run individually
+yarn dev:proxy      # Proxy server only
+yarn dev:viewer     # Log viewer only (with Turbopack)
+```
+
+### Production Mode
+
+Build and run in production:
+
+```bash
+# Build both applications
+yarn build
+
+# Start both applications
+yarn start
+
+# Or start individually
+yarn start:proxy    # Proxy server only
+yarn start:viewer   # Log viewer only
 ```
 
 This will start:
 - Proxy server on http://localhost:8080
 - Log viewer on http://localhost:3001
 
-### Run individually
+## Systemd Service Deployment
+
+For production deployment using systemd, see [systemd/README.md](systemd/README.md).
+
+Quick setup:
 
 ```bash
-# Proxy server only
-npm run dev:proxy
+# Build applications
+yarn build
 
-# Log viewer only
-npm run dev:viewer
+# Copy service files
+sudo cp systemd/*.service /etc/systemd/system/
+
+# Enable and start services
+sudo systemctl daemon-reload
+sudo systemctl enable proxy.service log-viewer.service copilot-api.service
+sudo systemctl start proxy.service log-viewer.service copilot-api.service
 ```
 
 ## Log Structure

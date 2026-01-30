@@ -3,16 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "dotenv -e .env -- next dev --turbopack",
     "build": "next build",
-    "start": "next start -p 3001",
+    "start": "dotenv -e .env -- next start",
     "lint": "next lint"
   },
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "next": "^15.1.6",
-    "date-fns": "^4.1.0"
+    "date-fns": "^4.1.0",
+    "dotenv-cli": "^7.4.2"
   },
   "devDependencies": {
     "@types/node": "^22",

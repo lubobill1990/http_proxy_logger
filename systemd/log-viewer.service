@@ -1,0 +1,19 @@
+[Unit]
+Description=HTTP Proxy Log Viewer
+After=network.target
+
+[Service]
+Type=simple
+User=bolu1
+WorkingDirectory=/c/src/nodeproxy/apps/log-viewer
+Environment=NODE_ENV=production
+EnvironmentFile=/c/src/nodeproxy/apps/log-viewer/.env
+ExecStart=/usr/bin/node /c/src/nodeproxy/node_modules/.bin/next start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=log-viewer
+
+[Install]
+WantedBy=multi-user.target

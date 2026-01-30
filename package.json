@@ -3,15 +3,23 @@
   "version": "1.0.0",
   "description": "HTTP proxy logger with web viewer",
   "private": true,
+  "workspaces": [
+    "apps/proxy",
+    "apps/log-viewer"
+  ],
   "scripts": {
-    "dev:proxy": "cd apps/proxy && npm run dev",
-    "dev:viewer": "cd apps/log-viewer && npm run dev",
-    "dev": "concurrently \"npm run dev:proxy\" \"npm run dev:viewer\"",
-    "install:proxy": "cd apps/proxy && npm install",
-    "install:viewer": "cd apps/log-viewer && npm install",
-    "install:all": "npm run install:proxy && npm run install:viewer"
+    "dev": "concurrently \"yarn workspace proxy dev\" \"yarn workspace log-viewer dev\"",
+    "dev:proxy": "yarn workspace proxy dev",
+    "dev:viewer": "yarn workspace log-viewer dev",
+    "build": "yarn workspace proxy build && yarn workspace log-viewer build",
+    "build:proxy": "yarn workspace proxy build",
+    "build:viewer": "yarn workspace log-viewer build",
+    "start": "concurrently \"yarn workspace proxy start\" \"yarn workspace log-viewer start\"",
+    "start:proxy": "yarn workspace proxy start",
+    "start:viewer": "yarn workspace log-viewer start"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
-  }
+    "concurrently": "^9.2.1"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

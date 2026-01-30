@@ -1,5 +1,5 @@
 {
-  "name": "http-proxy-logger",
+  "name": "proxy",
   "version": "1.0.0",
   "description": "HTTP proxy that logs all requests and responses",
   "main": "dist/index.js",

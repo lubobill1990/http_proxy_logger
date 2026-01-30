@@ -1,0 +1,17 @@
+[Unit]
+Description=Copilot API Server
+After=network.target
+
+[Service]
+Type=simple
+User=bolu1
+WorkingDirectory=/c/src/nodeproxy
+ExecStart=/usr/bin/npx copilot-api@latest start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=copilot-api
+
+[Install]
+WantedBy=multi-user.target
