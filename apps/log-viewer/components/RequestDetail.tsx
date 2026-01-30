@@ -2,7 +2,7 @@
 
 import { LogDetail } from '@/types/log';
 import { format } from 'date-fns';
-import { isClaudeSSE, parseSSEStreamToJSON } from '@/lib/sse-parser';
+import { isClaudeSSE, parseSSEStreamToJSON, ParsedSSE, SSEContentBlock } from '@/lib/sse-parser';
 import JsonViewer from './JsonViewer';
 
 interface RequestDetailProps {
@@ -53,7 +53,7 @@ export default function RequestDetail({ log, isDark = false }: RequestDetailProp
             <div>
               <h4 className="font-semibold text-sm mb-2">Content Blocks Summary:</h4>
               <div className="space-y-2">
-                {parsedSSE.contentBlocks.map((block: any, idx: number) => (
+                {parsedSSE.contentBlocks.map((block: SSEContentBlock, idx: number) => (
                   <div
                     key={idx}
                     className="p-3 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700"
@@ -65,6 +65,11 @@ export default function RequestDetail({ log, isDark = false }: RequestDetailProp
                       <span className="text-xs font-mono px-2 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 rounded">
                         {block.type}
                       </span>
+                      {block.name && (
+                        <span className="text-xs font-mono px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
+                          {block.name}
+                        </span>
+                      )}
                     </div>
                     <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
                       {block.content}

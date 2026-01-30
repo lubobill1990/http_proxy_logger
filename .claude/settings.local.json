@@ -4,7 +4,9 @@
       "Bash(npm install)",
       "Bash(npx create-next-app:*)",
       "Bash(npx create-next-app@latest apps/log-viewer --typescript --tailwind --app --no-src-dir --import-alias \"@/*\" --eslint --turbopack --no-git)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build)"
     ]
   }
 }

@@ -1,6 +1,82 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import zlib from 'zlib';
+import { promisify } from 'util';
 import { LogEntry, RequestMetadata, ResponseMetadata } from '@/types/log';
+
+const gunzip = promisify(zlib.gunzip);
+const inflate = promisify(zlib.inflate);
+const inflateRaw = promisify(zlib.inflateRaw);
+const brotliDecompress = promisify(zlib.brotliDecompress);
+
+/**
+ * Get content-encoding header value (normalized to lowercase)
+ */
+function getContentEncoding(headers: Record<string, string | string[]> | undefined): string | null {
+  if (!headers) return null;
+
+  const encoding = headers['content-encoding'];
+  if (typeof encoding === 'string') {
+    return encoding.toLowerCase();
+  }
+  if (Array.isArray(encoding) && encoding.length > 0) {
+    return encoding[0].toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Get content-type header value (normalized to lowercase)
+ */
+function getContentType(headers: Record<string, string | string[]> | undefined): string | null {
+  if (!headers) return null;
+
+  const contentType = headers['content-type'];
+  if (typeof contentType === 'string') {
+    return contentType.toLowerCase();
+  }
+  if (Array.isArray(contentType) && contentType.length > 0) {
+    return contentType[0].toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Check if content-type indicates text content
+ */
+function isTextContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+
+  return (
+    contentType.includes('text/') ||
+    contentType.includes('application/json') ||
+    contentType.includes('application/xml') ||
+    contentType.includes('application/javascript') ||
+    contentType.includes('+json') ||
+    contentType.includes('+xml')
+  );
+}
+
+/**
+ * Decompress buffer based on content-encoding
+ */
+async function decompressBuffer(buffer: Buffer, encoding: string): Promise<Buffer> {
+  switch (encoding) {
+    case 'gzip':
+      return await gunzip(buffer);
+    case 'deflate':
+      // Try inflate first, fall back to inflateRaw
+      try {
+        return await inflate(buffer);
+      } catch {
+        return await inflateRaw(buffer);
+      }
+    case 'br':
+      return await brotliDecompress(buffer);
+    default:
+      return buffer;
+  }
+}
 
 const LOG_DIR = path.join(process.cwd(), '..', '..', 'logs');
 
@@ -157,17 +233,47 @@ export async function getLogDetail(minuteDir: string, requestDir: string) {
     if (responseBodyFile) {
       const bodyPath = path.join(requestPath, responseBodyFile);
 
-      // Check if this is a text/event-stream response (SSE)
-      const contentType = responseMetadata?.headers['content-type'];
-      const isSSE = typeof contentType === 'string'
-        ? contentType.includes('text/event-stream')
-        : Array.isArray(contentType) && contentType.some(ct => ct.includes('text/event-stream'));
+      // Check if response is compressed
+      const contentEncoding = getContentEncoding(responseMetadata?.headers);
+      const contentType = getContentType(responseMetadata?.headers);
+      const isCompressed = contentEncoding && ['gzip', 'deflate', 'br'].includes(contentEncoding);
 
-      if (responseBodyFile.endsWith('.json')) {
+      // Check if this is a text/event-stream response (SSE)
+      const isSSE = contentType?.includes('text/event-stream') ?? false;
+
+      // Determine if content should be treated as text based on content-type
+      const isTextContent = isTextContentType(contentType) || isSSE;
+
+      if (isCompressed) {
+        // Read as binary and decompress
+        try {
+          const compressedBuffer = await fs.readFile(bodyPath);
+          const decompressedBuffer = await decompressBuffer(compressedBuffer, contentEncoding);
+
+          if (isTextContent) {
+            const textContent = decompressedBuffer.toString('utf-8');
+
+            // Try to parse as JSON if content-type indicates JSON
+            if (contentType?.includes('json')) {
+              try {
+                responseBody = JSON.parse(textContent);
+              } catch {
+                responseBody = textContent;
+              }
+            } else {
+              responseBody = textContent;
+            }
+          } else {
+            responseBody = `[Decompressed binary content: ${decompressedBuffer.length} bytes]`;
+          }
+        } catch (error) {
+          responseBody = `[Failed to decompress ${contentEncoding} content: ${error instanceof Error ? error.message : 'Unknown error'}]`;
+        }
+      } else if (responseBodyFile.endsWith('.json')) {
         const content = await fs.readFile(bodyPath, 'utf-8');
         responseBody = JSON.parse(content);
-      } else if (responseBodyFile.match(/\.(txt|html|css|js|xml)$/) || isSSE) {
-        // Read as text if it's a known text format OR if it's an SSE stream
+      } else if (responseBodyFile.match(/\.(txt|html|css|js|xml)$/) || isSSE || isTextContent) {
+        // Read as text if it's a known text format OR if it's an SSE stream OR content-type indicates text
         responseBody = await fs.readFile(bodyPath, 'utf-8');
       } else {
         responseBody = `[Binary file: ${responseBodyFile}]`;

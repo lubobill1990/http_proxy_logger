@@ -1,3 +1,16 @@
+export interface SSEContentBlock {
+  index: number;
+  type: string;
+  content: string;
+  name?: string;  // Tool name for tool_use blocks
+}
+
+export interface ParsedSSE {
+  events: any[];
+  fullText: string;
+  contentBlocks: SSEContentBlock[];
+}
+
 export function parseSSEStream(streamText: string): string {
   const lines = streamText.split('\n');
   // Store content blocks by index
@@ -39,11 +52,11 @@ export function parseSSEStream(streamText: string): string {
   return allText.join('\n\n');
 }
 
-export function parseSSEStreamToJSON(streamText: string): object {
+export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
   const lines = streamText.split('\n');
   const events: any[] = [];
   // Store content blocks by index for summary
-  const contentBlocks: Record<number, { type: string; text: string }> = {};
+  const contentBlocks: Record<number, { type: string; text: string; name?: string }> = {};
 
   for (const line of lines) {
     if (line.startsWith('event: ')) {
@@ -60,7 +73,8 @@ export function parseSSEStreamToJSON(streamText: string): object {
           if (data.type === 'content_block_start') {
             const index = data.index ?? 0;
             const blockType = data.content_block?.type || 'unknown';
-            contentBlocks[index] = { type: blockType, text: '' };
+            const toolName = data.content_block?.name;  // Extract tool name for tool_use blocks
+            contentBlocks[index] = { type: blockType, text: '', name: toolName };
           } else if (data.type === 'content_block_delta' && data.delta?.text) {
             const index = data.index ?? 0;
             if (!contentBlocks[index]) {
@@ -91,6 +105,7 @@ export function parseSSEStreamToJSON(streamText: string): object {
       index,
       type: block.type,
       content: block.text,
+      name: block.name,
     });
   }
 
