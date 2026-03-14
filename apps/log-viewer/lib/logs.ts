@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import zlib from 'zlib';
 import { promisify } from 'util';
+import { fdir } from 'fdir';
 import { LogEntry, RequestMetadata, ResponseMetadata } from '@/types/log';
 
 const gunzip = promisify(zlib.gunzip);
@@ -109,107 +110,97 @@ function resolveLogDir(dirName?: string): string {
   return dirs[0]?.path || path.join(process.cwd(), '..', '..', 'logs');
 }
 
-export async function getLogEntries(startTime?: number, endTime?: number, dirName?: string): Promise<LogEntry[]> {
+export async function getLogEntries(startTime?: number, endTime?: number, dirName?: string, search?: string): Promise<LogEntry[]> {
   const LOG_DIR = resolveLogDir(dirName);
-  const entries: LogEntry[] = [];
+  const logDirWithSep = LOG_DIR.replace(/\\/g, '/').replace(/\/?$/, '/');
 
   try {
-    const minuteDirs = await fs.readdir(LOG_DIR);
+    // Single fdir crawl — gets all directories in one native call (~50ms for thousands)
+    const allDirs = await new fdir()
+      .onlyDirs()
+      .crawl(LOG_DIR)
+      .withPromise() as string[];
 
-    for (const minuteDir of minuteDirs) {
-      const minutePath = path.join(LOG_DIR, minuteDir);
-      const stat = await fs.stat(minutePath);
+    const entries: LogEntry[] = [];
 
-      if (!stat.isDirectory()) continue;
+    // Cache minute-dir time bounds to avoid re-parsing
+    const minuteBoundsCache = new Map<string, { start: number; end: number } | null>();
 
-      const requestDirs = await fs.readdir(minutePath);
+    for (const dir of allDirs) {
+      // Normalize to forward slashes and extract relative path
+      const rel = dir.replace(/\\/g, '/').replace(/\/?$/, '').slice(logDirWithSep.length);
+      const segs = rel.split('/');
+      if (segs.length !== 2) continue; // only minute_dir/request_dir
 
-      for (const requestDir of requestDirs) {
-        const requestPath = path.join(minutePath, requestDir);
-        const requestStat = await fs.stat(requestPath);
+      const [minuteDir, requestDir] = segs;
 
-        if (!requestStat.isDirectory()) continue;
+      // Validate minute dir format
+      if (!/^\d{8}_\d{6}$/.test(minuteDir)) continue;
 
-        // Parse directory name: timestamp_method_path
-        const parts = requestDir.split('_');
-        if (parts.length < 2) continue;
-
-        const timestamp = parseInt(parts[0]);
-        if (isNaN(timestamp)) continue;
-
-        // Filter by time range
-        if (startTime && timestamp < startTime) continue;
-        if (endTime && timestamp > endTime) continue;
-
-        const method = parts[1];
-        const urlPath = parts.slice(2).join('_');
-
-        // Check what files exist
-        const files = await fs.readdir(requestPath);
-        const hasRequestBody = files.some(f => f.startsWith('request_body'));
-        const hasResponseBody = files.some(f => f.startsWith('response_body'));
-
-        let requestBodyType: string | undefined;
-        let responseBodyType: string | undefined;
-
-        if (hasRequestBody) {
-          const bodyFile = files.find(f => f.startsWith('request_body'));
-          requestBodyType = bodyFile?.split('.').pop();
+      // Coarse time filter on minute dir
+      if (startTime || endTime) {
+        let bounds = minuteBoundsCache.get(minuteDir);
+        if (bounds === undefined) {
+          const m = minuteDir.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+          if (m) {
+            const dirStart = new Date(
+              parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]),
+              parseInt(m[4]), parseInt(m[5]), parseInt(m[6])
+            ).getTime();
+            bounds = { start: dirStart, end: dirStart + 60_000 };
+          } else {
+            bounds = null;
+          }
+          minuteBoundsCache.set(minuteDir, bounds);
         }
-
-        if (hasResponseBody) {
-          const bodyFile = files.find(f => f.startsWith('response_body'));
-          responseBodyType = bodyFile?.split('.').pop();
+        if (bounds) {
+          if (endTime && bounds.start > endTime) continue;
+          if (startTime && bounds.end < startTime) continue;
         }
-
-        // Read metadata
-        let requestMetadata: RequestMetadata | undefined;
-        let responseMetadata: ResponseMetadata | undefined;
-
-        try {
-          const reqMeta = await fs.readFile(
-            path.join(requestPath, 'request_metadata.json'),
-            'utf-8'
-          );
-          requestMetadata = JSON.parse(reqMeta);
-        } catch {
-          // Metadata file doesn't exist or is invalid
-        }
-
-        try {
-          const resMeta = await fs.readFile(
-            path.join(requestPath, 'response_metadata.json'),
-            'utf-8'
-          );
-          responseMetadata = JSON.parse(resMeta);
-        } catch {
-          // Metadata file doesn't exist or is invalid
-        }
-
-        entries.push({
-          id: `${minuteDir}/${requestDir}`,
-          timestamp,
-          method,
-          path: urlPath,
-          directory: requestDir,
-          minuteDirectory: minuteDir,
-          requestMetadata,
-          responseMetadata,
-          hasRequestBody,
-          hasResponseBody,
-          requestBodyType,
-          responseBodyType,
-        });
       }
+
+      // Parse request dir: timestamp_METHOD_path
+      const firstUnderscore = requestDir.indexOf('_');
+      if (firstUnderscore === -1) continue;
+
+      const timestamp = parseInt(requestDir.slice(0, firstUnderscore));
+      if (isNaN(timestamp)) continue;
+
+      // Precise time filter
+      if (startTime && timestamp < startTime) continue;
+      if (endTime && timestamp > endTime) continue;
+
+      // Search filter on directory name
+      if (search) {
+        const searchNormalized = search.toLowerCase().replace(/\//g, '%2f');
+        if (!requestDir.toLowerCase().includes(searchNormalized)) continue;
+      }
+
+      const rest = requestDir.slice(firstUnderscore + 1);
+      const secondUnderscore = rest.indexOf('_');
+      const method = secondUnderscore === -1 ? rest : rest.slice(0, secondUnderscore);
+      const urlPath = secondUnderscore === -1 ? '' : rest.slice(secondUnderscore + 1);
+
+      entries.push({
+        id: `${minuteDir}/${requestDir}`,
+        timestamp,
+        method,
+        path: urlPath,
+        directory: requestDir,
+        minuteDirectory: minuteDir,
+        hasRequestBody: false,
+        hasResponseBody: false,
+      });
     }
+
+    // Sort by timestamp descending (newest first)
+    entries.sort((a, b) => b.timestamp - a.timestamp);
+
+    return entries;
   } catch (error) {
     console.error('Error reading logs:', error);
+    return [];
   }
-
-  // Sort by timestamp descending (newest first)
-  entries.sort((a, b) => b.timestamp - a.timestamp);
-
-  return entries;
 }
 
 export async function getLogDetail(minuteDir: string, requestDir: string, dirName?: string) {
@@ -219,109 +210,100 @@ export async function getLogDetail(minuteDir: string, requestDir: string, dirNam
   try {
     const files = await fs.readdir(requestPath);
 
-    // Read metadata
+    const requestBodyFile = files.find(f => f.startsWith('request_body'));
+    const responseBodyFile = files.find(f => f.startsWith('response_body'));
+    const hasError = files.includes('error.txt');
+
+    // Read ALL files in parallel
+    const [reqMetaRaw, resMetaRaw, reqBodyRaw, resBodyRaw, errorText] = await Promise.all([
+      fs.readFile(path.join(requestPath, 'request_metadata.json'), 'utf-8').catch(() => null),
+      fs.readFile(path.join(requestPath, 'response_metadata.json'), 'utf-8').catch(() => null),
+      requestBodyFile
+        ? (requestBodyFile.endsWith('.json') || requestBodyFile.match(/\.(txt|html|css|js|xml)$/))
+          ? fs.readFile(path.join(requestPath, requestBodyFile), 'utf-8').catch(() => null)
+          : fs.readFile(path.join(requestPath, requestBodyFile)).catch(() => null)
+        : Promise.resolve(null),
+      responseBodyFile
+        ? fs.readFile(path.join(requestPath, responseBodyFile)).catch(() => null)
+        : Promise.resolve(null),
+      hasError
+        ? fs.readFile(path.join(requestPath, 'error.txt'), 'utf-8').catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    // Parse metadata
     let requestMetadata: RequestMetadata | undefined;
     let responseMetadata: ResponseMetadata | undefined;
 
-    try {
-      const reqMeta = await fs.readFile(
-        path.join(requestPath, 'request_metadata.json'),
-        'utf-8'
-      );
-      requestMetadata = JSON.parse(reqMeta);
-    } catch {
-      // Ignore
+    if (reqMetaRaw) {
+      try { requestMetadata = JSON.parse(reqMetaRaw); } catch {}
+    }
+    if (resMetaRaw) {
+      try { responseMetadata = JSON.parse(resMetaRaw); } catch {}
     }
 
-    try {
-      const resMeta = await fs.readFile(
-        path.join(requestPath, 'response_metadata.json'),
-        'utf-8'
-      );
-      responseMetadata = JSON.parse(resMeta);
-    } catch {
-      // Ignore
-    }
-
-    // Read request body
+    // Parse request body
     let requestBody: string | object | undefined;
-    const requestBodyFile = files.find(f => f.startsWith('request_body'));
-    if (requestBodyFile) {
-      const bodyPath = path.join(requestPath, requestBodyFile);
-      if (requestBodyFile.endsWith('.json')) {
-        const content = await fs.readFile(bodyPath, 'utf-8');
-        requestBody = JSON.parse(content);
-      } else if (requestBodyFile.match(/\.(txt|html|css|js|xml)$/)) {
-        requestBody = await fs.readFile(bodyPath, 'utf-8');
+    if (requestBodyFile && reqBodyRaw !== null) {
+      if (typeof reqBodyRaw === 'string') {
+        if (requestBodyFile.endsWith('.json')) {
+          try { requestBody = JSON.parse(reqBodyRaw); } catch { requestBody = reqBodyRaw; }
+        } else {
+          requestBody = reqBodyRaw;
+        }
       } else {
         requestBody = `[Binary file: ${requestBodyFile}]`;
       }
+    } else if (requestBodyFile) {
+      requestBody = `[Binary file: ${requestBodyFile}]`;
     }
 
-    // Read response body
+    // Parse response body
     let responseBody: string | object | undefined;
-    const responseBodyFile = files.find(f => f.startsWith('response_body'));
-    if (responseBodyFile) {
-      const bodyPath = path.join(requestPath, responseBodyFile);
-
-      // Check if response is compressed
+    if (responseBodyFile && resBodyRaw !== null) {
       const contentEncoding = getContentEncoding(responseMetadata?.headers);
       const contentType = getContentType(responseMetadata?.headers);
       const isCompressed = contentEncoding && ['gzip', 'deflate', 'br'].includes(contentEncoding);
-
-      // Check if this is a text/event-stream response (SSE)
       const isSSE = contentType?.includes('text/event-stream') ?? false;
-
-      // Determine if content should be treated as text based on content-type
       const isTextContent = isTextContentType(contentType) || isSSE;
 
+      const bodyBuffer: Buffer = Buffer.isBuffer(resBodyRaw) ? resBodyRaw : Buffer.from(resBodyRaw as string, 'utf-8');
+
       if (isCompressed) {
-        // Read as binary and decompress
         try {
-          const compressedBuffer = await fs.readFile(bodyPath);
-          const decompressedBuffer = await decompressBuffer(compressedBuffer, contentEncoding);
-
+          const decompressed = await decompressBuffer(bodyBuffer, contentEncoding);
           if (isTextContent) {
-            const textContent = decompressedBuffer.toString('utf-8');
-
-            // Try to parse as JSON if content-type indicates JSON
+            const textContent = decompressed.toString('utf-8');
             if (contentType?.includes('json')) {
-              try {
-                responseBody = JSON.parse(textContent);
-              } catch {
-                responseBody = textContent;
-              }
+              try { responseBody = JSON.parse(textContent); } catch { responseBody = textContent; }
             } else {
               responseBody = textContent;
             }
           } else {
-            responseBody = `[Decompressed binary content: ${decompressedBuffer.length} bytes]`;
+            responseBody = `[Decompressed binary content: ${decompressed.length} bytes]`;
           }
-        } catch (error) {
-          responseBody = `[Failed to decompress ${contentEncoding} content: ${error instanceof Error ? error.message : 'Unknown error'}]`;
+        } catch (err) {
+          responseBody = `[Failed to decompress ${contentEncoding} content: ${err instanceof Error ? err.message : 'Unknown error'}]`;
         }
-      } else if (responseBodyFile.endsWith('.json')) {
-        const content = await fs.readFile(bodyPath, 'utf-8');
-        responseBody = JSON.parse(content);
-      } else if (responseBodyFile.match(/\.(txt|html|css|js|xml)$/) || isSSE || isTextContent) {
-        // Read as text if it's a known text format OR if it's an SSE stream OR content-type indicates text
-        responseBody = await fs.readFile(bodyPath, 'utf-8');
+      } else if (isTextContent || responseBodyFile.endsWith('.json') || responseBodyFile.match(/\.(txt|html|css|js|xml)$/)) {
+        const textContent = bodyBuffer.toString('utf-8');
+        if (responseBodyFile.endsWith('.json') || contentType?.includes('json')) {
+          try { responseBody = JSON.parse(textContent); } catch { responseBody = textContent; }
+        } else {
+          responseBody = textContent;
+        }
       } else {
         responseBody = `[Binary file: ${responseBodyFile}]`;
       }
     }
 
-    // Read error if exists
-    let error: string | undefined;
-    if (files.includes('error.txt')) {
-      error = await fs.readFile(path.join(requestPath, 'error.txt'), 'utf-8');
-    }
-
     // Parse directory name
-    const parts = requestDir.split('_');
-    const timestamp = parseInt(parts[0]);
-    const method = parts[1];
-    const urlPath = parts.slice(2).join('_');
+    const firstUnderscore = requestDir.indexOf('_');
+    const timestamp = parseInt(requestDir.slice(0, firstUnderscore));
+    const rest = requestDir.slice(firstUnderscore + 1);
+    const secondUnderscore = rest.indexOf('_');
+    const method = secondUnderscore === -1 ? rest : rest.slice(0, secondUnderscore);
+    const urlPath = secondUnderscore === -1 ? '' : rest.slice(secondUnderscore + 1);
 
     return {
       id: `${minuteDir}/${requestDir}`,
@@ -338,7 +320,7 @@ export async function getLogDetail(minuteDir: string, requestDir: string, dirNam
       responseBodyType: responseBodyFile?.split('.').pop(),
       requestBody,
       responseBody,
-      error,
+      error: errorText ?? undefined,
     };
   } catch (error) {
     console.error('Error reading log detail:', error);

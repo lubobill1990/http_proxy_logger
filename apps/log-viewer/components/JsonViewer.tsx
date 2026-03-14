@@ -83,10 +83,11 @@ function JsonNode({ data, name, isLast = true, depth = 0, isDark = false }: Json
   }
 
   if (typeof data === 'string') {
+    const hasNewlines = data.includes('\n');
     return (
       <div className="flex items-start">
         {name && <span className="text-blue-600 dark:text-blue-400">&quot;{name}&quot;: </span>}
-        <span className="text-orange-600 dark:text-orange-400 break-all">&quot;{data}&quot;</span>
+        <span className={`text-orange-600 dark:text-orange-400 break-all ${hasNewlines ? 'whitespace-pre-wrap' : ''}`}>&quot;{data}&quot;</span>
         {!isLast && <span>,</span>}
       </div>
     );
@@ -201,83 +202,112 @@ export default function JsonViewer({ data, isDark = false, id = 'default' }: Jso
     return arr.slice(start, end);
   };
 
-  // Apply JSONPath filter to data
-  const applyJsonPath = (path: string, sourceData: any) => {
+  // Apply a single path segment to current value, returns the resolved value
+  const applySegment = (current: any, key: string): any => {
+    if (key === '') return current;
+
+    // Handle wildcard with named key like tools[*]
+    const wildcardMatch = key.match(/^(\w+)\[\*\]$/);
+    if (wildcardMatch) {
+      const arr = current[wildcardMatch[1]];
+      if (!Array.isArray(arr)) return { error: 'Not an array' };
+      return arr; // return the full array; remaining segments will be mapped
+    }
+
+    // Handle standalone wildcard [*]
+    if (key === '[*]') {
+      if (!Array.isArray(current)) return { error: 'Not an array' };
+      return current; // identity — mapping handled by caller
+    }
+
+    // Handle array slice like messages[-3:] or items[1:5]
+    const sliceMatch = key.match(/^(\w+)\[(-?\d*:-?\d*)\]$/);
+    if (sliceMatch) {
+      const arr = current[sliceMatch[1]];
+      if (!Array.isArray(arr)) return { error: 'Not an array' };
+      const result = handleArraySlice(arr, sliceMatch[2]);
+      return result === null ? { error: 'Invalid slice syntax' } : result;
+    }
+
+    // Handle standalone slice like [-3:]
+    const standaloneSlice = key.match(/^\[(-?\d*:-?\d*)\]$/);
+    if (standaloneSlice) {
+      if (!Array.isArray(current)) return { error: 'Not an array' };
+      const result = handleArraySlice(current, standaloneSlice[1]);
+      return result === null ? { error: 'Invalid slice syntax' } : result;
+    }
+
+    // Handle array index like messages[0] or messages[-1]
+    const arrayMatch = key.match(/^(\w+)\[(-?\d+)\]$/);
+    if (arrayMatch) {
+      const arr = current[arrayMatch[1]];
+      if (!Array.isArray(arr)) return { error: 'Not an array' };
+      let index = parseInt(arrayMatch[2]);
+      if (index < 0) index = arr.length + index;
+      return arr[index];
+    }
+
+    // Handle standalone index like [0] or [-1]
+    const indexMatch = key.match(/^\[(-?\d+)\]$/);
+    if (indexMatch) {
+      if (!Array.isArray(current)) return { error: 'Not an array' };
+      let index = parseInt(indexMatch[1]);
+      if (index < 0) index = current.length + index;
+      return current[index];
+    }
+
+    // Plain object key
+    return current[key];
+  };
+
+  // Apply JSONPath filter to data (supports [*] wildcard)
+  const applyJsonPath = (path: string, sourceData: any): any => {
     if (!path.trim()) {
       return sourceData;
     }
 
     try {
-      // Simple JSONPath implementation
       const keys = path.replace(/^\$\.?/, '').split('.');
-      let current: any = sourceData;
 
-      for (const key of keys) {
-        if (key === '') continue;
+      // Find the first wildcard segment
+      const wildcardIdx = keys.findIndex(k => k === '[*]' || /^\w+\[\*\]$/.test(k));
 
-        // Handle array slice like messages[-3:] or items[1:5]
-        const sliceMatch = key.match(/^(\w+)\[(-?\d*:-?\d*)\]$/);
-        if (sliceMatch) {
-          const [, objKey, sliceStr] = sliceMatch;
-          const arr = current[objKey];
-          if (!Array.isArray(arr)) {
-            return { error: 'Not an array' };
-          }
-          const result = handleArraySlice(arr, sliceStr);
-          if (result === null) {
-            return { error: 'Invalid slice syntax' };
-          }
-          current = result;
-        } else if (key.match(/^\[(-?\d*:-?\d*)\]$/)) {
-          // Handle standalone slice like [-3:] or [1:5]
-          const standaloneSliceMatch = key.match(/^\[(-?\d*:-?\d*)\]$/);
-          if (standaloneSliceMatch && Array.isArray(current)) {
-            const result = handleArraySlice(current, standaloneSliceMatch[1]);
-            if (result === null) {
-              return { error: 'Invalid slice syntax' };
-            }
-            current = result;
-          } else {
-            return { error: 'Not an array' };
-          }
-        } else {
-          // Handle array index (including negative index like [-1])
-          const arrayMatch = key.match(/^(\w+)\[(-?\d+)\]$/);
-          if (arrayMatch) {
-            const [, objKey, indexStr] = arrayMatch;
-            const arr = current[objKey];
-            if (!Array.isArray(arr)) {
-              return { error: 'Not an array' };
-            }
-            let index = parseInt(indexStr);
-            // Support negative index
-            if (index < 0) {
-              index = arr.length + index;
-            }
-            current = arr[index];
-          } else if (key.match(/^\[(-?\d+)\]$/)) {
-            // Handle standalone array index like [0] or [-1]
-            const indexMatch = key.match(/^\[(-?\d+)\]$/);
-            if (indexMatch && Array.isArray(current)) {
-              let index = parseInt(indexMatch[1]);
-              if (index < 0) {
-                index = current.length + index;
-              }
-              current = current[index];
-            } else {
-              return { error: 'Not an array' };
-            }
-          } else {
-            current = current[key];
-          }
+      if (wildcardIdx === -1) {
+        // No wildcard — simple traversal
+        let current: any = sourceData;
+        for (const key of keys) {
+          if (key === '') continue;
+          current = applySegment(current, key);
+          if (current === undefined) return { error: 'Path not found' };
+          if (current && typeof current === 'object' && 'error' in current && Object.keys(current).length === 1) return current;
         }
-
-        if (current === undefined) {
-          return { error: 'Path not found' };
-        }
+        return current;
       }
 
-      return current;
+      // Process segments before and including the wildcard to get the array
+      let current: any = sourceData;
+      for (let i = 0; i <= wildcardIdx; i++) {
+        if (keys[i] === '') continue;
+        current = applySegment(current, keys[i]);
+        if (current === undefined) return { error: 'Path not found' };
+        if (current && typeof current === 'object' && 'error' in current && Object.keys(current).length === 1) return current;
+      }
+
+      if (!Array.isArray(current)) return { error: 'Wildcard target is not an array' };
+
+      // Remaining segments after the wildcard
+      const remainingKeys = keys.slice(wildcardIdx + 1);
+
+      if (remainingKeys.length === 0 || (remainingKeys.length === 1 && remainingKeys[0] === '')) {
+        return current; // Nothing after wildcard, return the array itself
+      }
+
+      // Apply remaining path to each element; support nested wildcards via recursion
+      const remainingPath = remainingKeys.join('.');
+      const results = current.map((item: any) => applyJsonPath(remainingPath, item));
+
+      // Filter out errors
+      return results.filter((r: any) => !(r && typeof r === 'object' && 'error' in r && Object.keys(r).length === 1));
     } catch (e) {
       return { error: 'Invalid path' };
     }
@@ -383,7 +413,7 @@ export default function JsonViewer({ data, isDark = false, id = 'default' }: Jso
       <div>
         <input
           type="text"
-          placeholder="JSONPath (e.g., messages[-1], use comma for multiple: model, messages[-3:])"
+          placeholder="JSONPath (e.g., messages[-1], tools[*].name, comma for multiple: model, messages[-3:])"
           value={jsonPath}
           onChange={(e) => handleJsonPathChange(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-sm font-mono"

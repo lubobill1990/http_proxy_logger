@@ -19,9 +19,13 @@ Config YAML example (filter.yaml):
     access_output_dir: ./logs/filtered/access
     from: "2026-03-14T10:00"
     to: "2026-03-14T18:00"
-    filter_domains:
-      - api.openai.com
-      - openai.com
+    request_filters:
+    - domains: ["api.openai.com"]
+        methods: ["POST"]
+        path_patterns: ["/chat/completions"]
+        headers_patterns:
+            - Content-Type: "application/json"
+              vscode-sessionid: ".*"
 """
 
 import argparse
@@ -87,6 +91,85 @@ def matches_path(meta: dict, path_patterns: list[str]) -> bool:
     return any(re.search(p, req_path) for p in path_patterns)
 
 
+def get_request_headers(meta: dict) -> dict[str, str]:
+    headers = meta.get("headers") or {}
+    if not isinstance(headers, dict):
+        return {}
+    return {
+        str(key).lower(): "" if value is None else str(value)
+        for key, value in headers.items()
+    }
+
+
+def matches_header_pattern(headers: dict[str, str], header_pattern: dict[str, str]) -> bool:
+    if not header_pattern:
+        return True
+
+    for header_name, value_pattern in header_pattern.items():
+        header_value = headers.get(str(header_name).lower())
+        if header_value is None:
+            return False
+        if not re.search(str(value_pattern), header_value):
+            return False
+
+    return True
+
+
+def matches_headers(meta: dict, headers_patterns: list[dict[str, str]]) -> bool:
+    if not headers_patterns:
+        return True
+
+    headers = get_request_headers(meta)
+    return any(matches_header_pattern(headers, header_pattern) for header_pattern in headers_patterns)
+
+
+def matches_request_filter(meta: dict, request_filter: dict) -> bool:
+    return (
+        matches_domain(meta, request_filter.get("domains", []) or [])
+        and matches_method(meta, request_filter.get("methods", []) or [])
+        and matches_path(meta, request_filter.get("path_patterns", []) or [])
+        and matches_headers(meta, request_filter.get("headers_patterns", []) or [])
+    )
+
+
+def matches_request_filters(meta: dict | None, request_filters: list[dict]) -> bool:
+    if not request_filters:
+        return True
+    if not meta:
+        return False
+    return any(matches_request_filter(meta, request_filter) for request_filter in request_filters)
+
+
+def matches_access_line_request_filter(line: str, request_filter: dict) -> bool:
+    has_supported_condition = False
+
+    domains = request_filter.get("domains", []) or []
+    if domains:
+        has_supported_condition = True
+        if not any(domain in line for domain in domains):
+            return False
+
+    methods = request_filter.get("methods", []) or []
+    if methods:
+        has_supported_condition = True
+        if not any(f'"{method.upper()} ' in line for method in methods):
+            return False
+
+    path_patterns = request_filter.get("path_patterns", []) or []
+    if path_patterns:
+        has_supported_condition = True
+        if not any(re.search(path_pattern, line) for path_pattern in path_patterns):
+            return False
+
+    return has_supported_condition
+
+
+def matches_access_line_request_filters(line: str, request_filters: list[dict]) -> bool:
+    if not request_filters:
+        return True
+    return any(matches_access_line_request_filter(line, request_filter) for request_filter in request_filters)
+
+
 def matches_time(ts_ms: int, from_dt: datetime | None, to_dt: datetime | None) -> bool:
     if from_dt and ts_ms < from_dt.timestamp() * 1000:
         return False
@@ -115,6 +198,7 @@ def filter_access_logs(
     to_dt: datetime | None,
     methods: list[str] | None = None,
     path_patterns: list[str] | None = None,
+    request_filters: list[dict] | None = None,
 ):
     """Filter access log files by domain and time range."""
     if not access_input.exists():
@@ -166,6 +250,10 @@ def filter_access_logs(
                     if not any(re.search(p, line) for p in path_patterns):
                         continue
 
+                # Request filters on access log line (headers are not available here)
+                if request_filters and not matches_access_line_request_filters(line, request_filters):
+                    continue
+
                 fout.write(line)
                 count += 1
 
@@ -185,6 +273,7 @@ def filter_captured_logs(
     to_dt: datetime | None,
     methods: list[str] | None = None,
     path_patterns: list[str] | None = None,
+    request_filters: list[dict] | None = None,
 ) -> tuple[int, int]:
     """Filter captured log directories. Returns (matched, total)."""
     if not input_dir.exists():
@@ -229,6 +318,10 @@ def filter_captured_logs(
 
             # Path pattern filter
             if meta and path_patterns and not matches_path(meta, path_patterns):
+                continue
+
+            # Structured request filter (OR between filter objects, AND within one object)
+            if request_filters and not matches_request_filters(meta, request_filters):
                 continue
 
             # Copy to output
@@ -305,6 +398,16 @@ def main():
             print(f"  ⚠  Config not found: {config_path}")
             sys.exit(1)
 
+    legacy_config_keys = [
+        key for key in ("filter_domains", "filter_methods", "filter_path_patterns")
+        if key in cfg
+    ]
+    if legacy_config_keys:
+        print(
+            "  ⚠  Legacy config keys ignored: "
+            f"{', '.join(legacy_config_keys)}; use request_filters instead."
+        )
+
     # CLI args override YAML config
     base = Path(__file__).parent
 
@@ -327,9 +430,10 @@ def main():
     if access_output and not access_output.is_absolute():
         access_output = base / access_output
 
-    domains = args.domains or cfg.get("filter_domains", []) or []
-    methods = args.methods or cfg.get("filter_methods", []) or []
-    path_patterns = args.path_patterns or cfg.get("filter_path_patterns", []) or []
+    domains = args.domains or []
+    methods = args.methods or []
+    path_patterns = args.path_patterns or []
+    request_filters = cfg.get("request_filters", []) or []
     from_dt = parse_dt(args.from_time or cfg.get("from"))
     to_dt = parse_dt(args.to or cfg.get("to"))
 
@@ -357,15 +461,35 @@ def main():
         print(f"  Methods:     {', '.join(methods)}")
     if path_patterns:
         print(f"  Paths:       {', '.join(path_patterns)}")
+    if request_filters:
+        print(f"  Req filters: {len(request_filters)} configured")
     print("=" * 60)
 
     # Filter captured logs
-    matched, total = filter_captured_logs(input_dir, output_dir, domains, from_dt, to_dt, methods, path_patterns)
+    matched, total = filter_captured_logs(
+        input_dir,
+        output_dir,
+        domains,
+        from_dt,
+        to_dt,
+        methods,
+        path_patterns,
+        request_filters,
+    )
     print(f"\n  Captured: {matched}/{total} requests matched")
 
     # Filter access logs
     if access_input and access_output:
-        access_count = filter_access_logs(access_input, access_output, domains, from_dt, to_dt, methods, path_patterns)
+        access_count = filter_access_logs(
+            access_input,
+            access_output,
+            domains,
+            from_dt,
+            to_dt,
+            methods,
+            path_patterns,
+            request_filters,
+        )
         print(f"  Access:   {access_count} log lines matched")
 
     print(f"\n  Output written to: {output_dir}")

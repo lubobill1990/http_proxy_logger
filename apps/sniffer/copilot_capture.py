@@ -40,7 +40,7 @@ def get_minute_directory() -> Path:
 
 def get_request_directory(method: str, url_path: str) -> Path:
     timestamp = int(time.time() * 1000)
-    safe_path = url_path.lstrip("/").replace("/", "_").replace("?", "_")[:100] or "root"
+    safe_path = url_path.lstrip("/").replace("/", "%2F").replace("?", "_")[:200] or "root"
     dir_name = f"{timestamp}_{method}_{safe_path}"
     minute_dir = get_minute_directory()
     req_dir = minute_dir / dir_name

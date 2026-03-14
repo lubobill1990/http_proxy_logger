@@ -6,8 +6,7 @@ export async function GET(
   context: { params: Promise<{ id: string[] }> }
 ) {
   const params = await context.params;
-  const [minuteDir, ...requestDirParts] = params.id;
-  const requestDir = requestDirParts.join('/');
+  const [minuteDir, requestDir] = params.id;
   const dir = request.nextUrl.searchParams.get('dir') || undefined;
 
   if (!minuteDir || !requestDir) {

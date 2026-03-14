@@ -6,12 +6,11 @@ input_dir: ./logs/all/captured
 access_input_dir: ./logs/all/access
 
 # Output directories (filtered results)
-output_dir: ./logs/opencode-filtered/captured
-access_output_dir: ./logs/opencode-filtered/access
+output_dir: ./logs/githubcopilot-filtered/captured
+access_output_dir: ./logs/githubcopilot-filtered/access
 
 # Time range (optional, omit to include all)
 from: "2026-03-14T17:05"
-to: "2026-03-15T16:40"
 
 # Request filters:
 # - array items are OR
@@ -21,7 +20,6 @@ to: "2026-03-15T16:40"
 request_filters:
   - domains: ["api.github.com", "copilot-proxy.githubusercontent.com", "api.individual.githubcopilot.com", "api.business.githubcopilot.com", "api.enterprise.githubcopilot.com", "proxy.enterprise.githubcopilot.com", "githubcopilot.com"]
     methods: ["POST"]
-    path_patterns: ["/chat/completions"]
+    # path_patterns: ["/chat/completions", "/v1/messages"]
     headers_patterns:
-      - Content-Type: "application/json"
-        vscode-sessionid: "2e67d240-97f3-4e51-81cb-d968001cefd71773466221936"
+      - vscode-sessionid: "2e67d240-97f3-4e51-81cb-d968001cefd71773466221936"

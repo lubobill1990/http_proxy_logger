@@ -13,6 +13,8 @@ Press Ctrl+C to stop. System proxy is automatically restored on exit.
 import argparse
 import atexit
 import json
+import signal
+import sys
 import time
 import winreg
 from datetime import datetime, timezone
@@ -72,6 +74,35 @@ def resolve_domains(raw: list[str] | None) -> list[str] | None:
     return expanded or None
 
 
+# ─── Proxy state file (crash recovery) ──────────────────────────────────────
+PROXY_STATE_FILE = Path(__file__).parent / ".proxy_state.json"
+
+
+def save_proxy_state(original: dict):
+    """Persist original proxy settings to disk for crash recovery."""
+    PROXY_STATE_FILE.write_text(
+        json.dumps(original, indent=2), encoding="utf-8"
+    )
+
+
+def load_proxy_state() -> dict | None:
+    """Load saved proxy state from a previous (possibly crashed) run."""
+    if PROXY_STATE_FILE.exists():
+        try:
+            return json.loads(PROXY_STATE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def clear_proxy_state():
+    """Remove the proxy state file after successful restore."""
+    try:
+        PROXY_STATE_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # ─── Windows proxy registry ─────────────────────────────────────────────────
 INET_SETTINGS = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 
@@ -103,6 +134,24 @@ def set_proxy(enable: bool, server: str = ""):
         internet_set_option(0, 37, 0, 0)  # INTERNET_OPTION_REFRESH
     except Exception:
         pass
+
+
+def check_and_recover_proxy():
+    """On startup, check if a previous run crashed without restoring proxy.
+    If so, restore immediately."""
+    stale = load_proxy_state()
+    if stale is None:
+        return
+    current = get_proxy_settings()
+    # If the current proxy still points to a sniffer port (127.0.0.1:XXXX),
+    # it means the previous run crashed without restoring.
+    server = current.get("ProxyServer", "")
+    if current.get("ProxyEnable") and server.startswith("127.0.0.1:"):
+        print("⚠️  Detected stale proxy from a previous crashed run.")
+        print(f"   Current:  {server}")
+        print(f"   Restoring: enable={bool(stale['ProxyEnable'])}, server={stale['ProxyServer']}")
+        set_proxy(bool(stale["ProxyEnable"]), stale["ProxyServer"])
+    clear_proxy_state()
 
 
 # ─── Access log (nginx-style) ───────────────────────────────────────────────
@@ -166,7 +215,7 @@ def get_request_directory(log_dir: Path, method: str, url_path: str) -> Path:
     timestamp = int(time.time() * 1000)
     safe_path = (
         url_path.lstrip("/")
-        .replace("/", "_")
+        .replace("/", "%2F")
         .replace("\\", "_")
         .replace(":", "_")
         .replace("*", "_")
@@ -174,7 +223,7 @@ def get_request_directory(log_dir: Path, method: str, url_path: str) -> Path:
         .replace('"', "_")
         .replace("<", "_")
         .replace(">", "_")
-        .replace("|", "_")[:100]
+        .replace("|", "_")[:200]
         or "root"
     )
     dir_name = f"{timestamp}_{method}_{safe_path}"
@@ -335,9 +384,22 @@ async def run():
     # Access log
     access_log = AccessLog(access_log_dir)
 
-    # Save & set system proxy
+    # ── Crash recovery: restore proxy if previous run didn't clean up ──
+    check_and_recover_proxy()
+
+    # ── Detect existing upstream proxy ───────────────────────────────────
     original_proxy = get_proxy_settings()
     proxy_set = False
+    upstream_proxy: str | None = None
+    sniffer_server = f"127.0.0.1:{port}"
+
+    if auto_proxy and original_proxy["ProxyEnable"] and original_proxy["ProxyServer"]:
+        existing = original_proxy["ProxyServer"]
+        # Only use as upstream if it's not pointing to our own sniffer
+        if existing != sniffer_server:
+            upstream_proxy = existing
+            print(f"🔗 Detected existing system proxy: {existing}")
+            print(f"   Will chain through it as upstream proxy.")
 
     def restore_proxy():
         nonlocal proxy_set
@@ -348,12 +410,30 @@ async def run():
                 original_proxy["ProxyServer"],
             )
             proxy_set = False
+            clear_proxy_state()
             print("✅ System proxy restored.")
 
+    # Register cleanup for normal exit
     atexit.register(restore_proxy)
 
+    # Register signal handlers for abnormal termination
+    def signal_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        print(f"\n⚠️  Received {sig_name}, cleaning up...")
+        restore_proxy()
+        access_log.close()
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    # SIGBREAK is Windows-specific (Ctrl+Break / taskkill)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal_handler)
+
     if auto_proxy:
-        set_proxy(True, f"127.0.0.1:{port}")
+        # Persist original settings BEFORE changing them (crash recovery)
+        save_proxy_state(original_proxy)
+        set_proxy(True, sniffer_server)
         proxy_set = True
 
     # Print startup info
@@ -362,6 +442,8 @@ async def run():
     print("=" * 60)
     print(f"  Config:      {config_path.resolve()}")
     print(f"  Proxy:       http://127.0.0.1:{port}")
+    if upstream_proxy:
+        print(f"  Upstream:    http://{upstream_proxy}")
     print(f"  Capture dir: {capture_dir.resolve()}")
     print(f"  Access log:  {access_log_dir.resolve()}")
     if filter_domains:
@@ -377,11 +459,15 @@ async def run():
     if exclude_path_patterns:
         print(f"  Excl paths:  {', '.join(exclude_path_patterns[:3])}")
     print(f"  Sys proxy:   {'enabled' if proxy_set else 'manual mode'}")
+    print(f"  State file:  {PROXY_STATE_FILE.resolve()}")
     print("=" * 60)
     print("  Press Ctrl+C to stop\n")
 
     # Start mitmproxy
-    opts = options.Options(listen_port=port)
+    mitm_opts: dict = {"listen_port": port}
+    if upstream_proxy:
+        mitm_opts["mode"] = [f"upstream:http://{upstream_proxy}/"]
+    opts = options.Options(**mitm_opts)
     master = DumpMaster(opts)
     master.addons.add(TrafficCapture(capture_dir, access_log, filter_domains, exclude_domains, exclude_path_patterns))
 

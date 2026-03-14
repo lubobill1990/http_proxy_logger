@@ -24,13 +24,16 @@ export function parseSSEStream(streamText: string): string {
       try {
         const data = JSON.parse(dataStr);
 
-        // Claude format: content_block_delta with delta.text
-        if (data.type === 'content_block_delta' && data.delta?.text) {
+        // Claude format: content_block_delta with delta.text or delta.thinking
+        if (data.type === 'content_block_delta') {
           const index = data.index ?? 0;
-          if (!contentBlocks[index]) {
-            contentBlocks[index] = [];
+          const text = data.delta?.text ?? data.delta?.thinking;
+          if (text) {
+            if (!contentBlocks[index]) {
+              contentBlocks[index] = [];
+            }
+            contentBlocks[index].push(text);
           }
-          contentBlocks[index].push(data.delta.text);
         }
 
         // OpenAI format: choices[].delta.content
@@ -93,18 +96,25 @@ export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
             const blockType = data.content_block?.type || 'unknown';
             const toolName = data.content_block?.name;
             contentBlocks[index] = { type: blockType, text: '', name: toolName };
-          } else if (data.type === 'content_block_delta' && data.delta?.text) {
+          } else if (data.type === 'content_block_delta') {
             const index = data.index ?? 0;
-            if (!contentBlocks[index]) {
-              contentBlocks[index] = { type: 'text', text: '' };
+            if (data.delta?.text) {
+              if (!contentBlocks[index]) {
+                contentBlocks[index] = { type: 'text', text: '' };
+              }
+              contentBlocks[index].text += data.delta.text;
+            } else if (data.delta?.thinking) {
+              if (!contentBlocks[index]) {
+                contentBlocks[index] = { type: 'thinking', text: '' };
+              }
+              contentBlocks[index].text += data.delta.thinking;
+            } else if (data.delta?.partial_json) {
+              if (!contentBlocks[index]) {
+                contentBlocks[index] = { type: 'tool_use', text: '' };
+              }
+              contentBlocks[index].text += data.delta.partial_json;
             }
-            contentBlocks[index].text += data.delta.text;
-          } else if (data.type === 'content_block_delta' && data.delta?.partial_json) {
-            const index = data.index ?? 0;
-            if (!contentBlocks[index]) {
-              contentBlocks[index] = { type: 'tool_use', text: '' };
-            }
-            contentBlocks[index].text += data.delta.partial_json;
+            // signature_delta is intentionally skipped (not useful as content)
           }
 
           // ── OpenAI format ──
@@ -157,11 +167,16 @@ export function isSSEResponse(
   requestMetadata?: { headers: Record<string, string> },
   responseMetadata?: { headers: Record<string, string | string[]> }
 ): boolean {
-  if (!responseMetadata) return false;
+  if (!responseMetadata?.headers) return false;
 
-  const contentType = Array.isArray(responseMetadata.headers['content-type'])
-    ? responseMetadata.headers['content-type'][0]
-    : responseMetadata.headers['content-type'];
+  // Case-insensitive header lookup
+  const contentTypeKey = Object.keys(responseMetadata.headers)
+    .find(k => k.toLowerCase() === 'content-type');
+  if (!contentTypeKey) return false;
+
+  const contentType = Array.isArray(responseMetadata.headers[contentTypeKey])
+    ? (responseMetadata.headers[contentTypeKey] as string[])[0]
+    : responseMetadata.headers[contentTypeKey] as string;
 
   return contentType?.includes('text/event-stream') ?? false;
 }

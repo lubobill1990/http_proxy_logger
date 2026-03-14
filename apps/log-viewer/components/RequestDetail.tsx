@@ -8,9 +8,11 @@ import JsonViewer from './JsonViewer';
 interface RequestDetailProps {
   log: LogDetail | null;
   isDark?: boolean;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
 }
 
-export default function RequestDetail({ log, isDark = false }: RequestDetailProps) {
+export default function RequestDetail({ log, isDark = false, isFavorite = false, onToggleFavorite }: RequestDetailProps) {
   if (!log) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
@@ -62,7 +64,13 @@ export default function RequestDetail({ log, isDark = false }: RequestDetailProp
                       <span className="text-xs font-mono px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
                         Index {block.index}
                       </span>
-                      <span className="text-xs font-mono px-2 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 rounded">
+                      <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                        block.type === 'thinking'
+                          ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200'
+                          : block.type === 'tool_use'
+                          ? 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200'
+                          : 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200'
+                      }`}>
                         {block.type}
                       </span>
                       {block.name && (
@@ -137,7 +145,20 @@ export default function RequestDetail({ log, isDark = false }: RequestDetailProp
           >
             {log.method}
           </span>
-          <span className="text-sm font-mono break-all">{log.path || '/'}</span>
+          <span className="text-sm font-mono break-all flex-1">{log.path ? '/' + decodeURIComponent(log.path) : '/'}</span>
+          {onToggleFavorite && (
+            <button
+              onClick={onToggleFavorite}
+              className={`shrink-0 text-xl leading-none px-1 transition-colors ${
+                isFavorite
+                  ? 'text-yellow-500 hover:text-yellow-600'
+                  : 'text-gray-300 dark:text-gray-600 hover:text-yellow-400'
+              }`}
+              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            >
+              {isFavorite ? '\u2605' : '\u2606'}
+            </button>
+          )}
         </div>
         <div className="text-xs text-gray-500 dark:text-gray-400">
           {format(new Date(log.timestamp), 'yyyy-MM-dd HH:mm:ss.SSS')}
