@@ -110,7 +110,7 @@ function resolveLogDir(dirName?: string): string {
   return dirs[0]?.path || path.join(process.cwd(), '..', '..', 'logs');
 }
 
-export async function getLogEntries(startTime?: number, endTime?: number, dirName?: string, search?: string): Promise<LogEntry[]> {
+export async function getLogEntries(startTime?: number, endTime?: number, dirName?: string, search?: string[]): Promise<LogEntry[]> {
   const LOG_DIR = resolveLogDir(dirName);
   const logDirWithSep = LOG_DIR.replace(/\\/g, '/').replace(/\/?$/, '/');
 
@@ -170,10 +170,14 @@ export async function getLogEntries(startTime?: number, endTime?: number, dirNam
       if (startTime && timestamp < startTime) continue;
       if (endTime && timestamp > endTime) continue;
 
-      // Search filter on directory name
-      if (search) {
-        const searchNormalized = search.toLowerCase().replace(/\//g, '%2f');
-        if (!requestDir.toLowerCase().includes(searchNormalized)) continue;
+      // Search filter on directory name (OR: match ANY term)
+      if (search && search.length > 0) {
+        const dirLower = requestDir.toLowerCase();
+        const matched = search.some(term => {
+          const normalized = term.toLowerCase().replace(/\//g, '%2f');
+          return dirLower.includes(normalized);
+        });
+        if (!matched) continue;
       }
 
       const rest = requestDir.slice(firstUnderscore + 1);

@@ -10,9 +10,10 @@ interface RequestDetailProps {
   isDark?: boolean;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
+  currentDir?: string;
 }
 
-export default function RequestDetail({ log, isDark = false, isFavorite = false, onToggleFavorite }: RequestDetailProps) {
+export default function RequestDetail({ log, isDark = false, isFavorite = false, onToggleFavorite, currentDir }: RequestDetailProps) {
   if (!log) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
@@ -24,6 +25,21 @@ export default function RequestDetail({ log, isDark = false, isFavorite = false,
   const isSSE = isSSEResponse(log.requestMetadata, log.responseMetadata);
   const parsedSSE = isSSE && typeof log.responseBody === 'string'
     ? parseSSEStreamToJSON(log.responseBody)
+    : null;
+
+  // Detect LLM call: response is SSE stream + request JSON has messages key
+  const isLlmCall = (() => {
+    if (!isSSE) return false;
+    let reqBody: any = null;
+    if (typeof log.requestBody === 'object') reqBody = log.requestBody;
+    else if (typeof log.requestBody === 'string') {
+      try { reqBody = JSON.parse(log.requestBody); } catch { return false; }
+    }
+    return reqBody && (Array.isArray(reqBody.messages) || reqBody.messages !== undefined);
+  })();
+
+  const llmUrl = isLlmCall
+    ? `/llm/${encodeURIComponent(log.minuteDirectory)}/${encodeURIComponent(log.directory)}${currentDir ? `?dir=${encodeURIComponent(currentDir)}` : ''}`
     : null;
 
   const renderBody = (
@@ -164,8 +180,20 @@ export default function RequestDetail({ log, isDark = false, isFavorite = false,
           {format(new Date(log.timestamp), 'yyyy-MM-dd HH:mm:ss.SSS')}
         </div>
         {isSSE && (
-          <div className="mt-2 text-xs text-blue-600 dark:text-blue-400 font-medium">
-            SSE Stream Detected
+          <div className="mt-2 flex items-center gap-3">
+            <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+              SSE Stream Detected
+            </span>
+            {llmUrl && (
+              <a
+                href={llmUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium transition-colors"
+              >
+                深入 LLM 调用 &rarr;
+              </a>
+            )}
           </div>
         )}
       </div>

@@ -21,10 +21,10 @@ interface RequestListProps {
   logs: LogEntry[];
   selectedId?: string;
   onSelect: (id: string) => void;
-  onNavigate: (params: { q?: string; start?: string; end?: string }) => void;
+  onNavigate: (params: { q?: string[]; start?: string; end?: string; methods?: string[]; fav?: boolean }) => void;
   favorites: Set<string>;
-  serverQ: string;
-  initialQ?: string;
+  serverQ: string[];
+  initialQ?: string[];
   initialStart?: string;
   initialEnd?: string;
   initialFav?: boolean;
@@ -39,65 +39,88 @@ export default function RequestList({
   onNavigate,
   favorites,
   serverQ,
-  initialQ = '',
+  initialQ = [],
   initialStart = '',
   initialEnd = '',
   initialFav = false,
   initialMethods = [],
   isPending = false,
 }: RequestListProps) {
-  const [searchTerm, setSearchTerm] = useState(initialQ);
+  const [searchTerms, setSearchTerms] = useState<string[]>(initialQ.length > 0 ? initialQ : ['']);
   const [startDate, setStartDate] = useState(initialStart);
   const [endDate, setEndDate] = useState(initialEnd);
   const [showFavOnly, setShowFavOnly] = useState(initialFav);
   const [selectedMethods, setSelectedMethods] = useState<Set<string>>(new Set(initialMethods));
   const selectedRef = useRef<HTMLButtonElement>(null);
 
-  // Sync local state with URL on external changes (back/forward, dir change)
-  const prevInitialQ = useRef(initialQ);
-  const prevInitialStart = useRef(initialStart);
-  const prevInitialEnd = useRef(initialEnd);
-  useEffect(() => {
-    if (prevInitialQ.current !== initialQ) {
-      setSearchTerm(initialQ);
-      prevInitialQ.current = initialQ;
-    }
-    if (prevInitialStart.current !== initialStart) {
-      setStartDate(initialStart);
-      prevInitialStart.current = initialStart;
-    }
-    if (prevInitialEnd.current !== initialEnd) {
-      setEndDate(initialEnd);
-      prevInitialEnd.current = initialEnd;
-    }
-  }, [initialQ, initialStart, initialEnd]);
+  // Helper to serialize filter state uniformly
+  const serializeFilters = (q: string[], start: string, end: string, methods: string[], fav: boolean) => {
+    const validQ = q.filter(Boolean);
+    return JSON.stringify({
+      q: validQ.length > 0 ? validQ : [''],
+      start,
+      end,
+      methods: Array.from(methods).sort(),
+      fav
+    });
+  };
 
-  // Debounce
-  const debouncedSearch = useDebounce(searchTerm, 300);
-  const timeKey = `${startDate}|${endDate}`;
-  const debouncedTimeKey = useDebounce(timeKey, 500);
+  const filtersState = serializeFilters(searchTerms, startDate, endDate, Array.from(selectedMethods), showFavOnly);
+  const debouncedFiltersState = useDebounce(filtersState, 800);
+  const lastPushedFilters = useRef<string | null>(null);
 
-  // Smart search: navigate only when search is NOT a refinement of serverQ
-  const prevDebouncedSearch = useRef(debouncedSearch);
+  // 1. Sync OUT to URL on user interaction (debounced)
+  const prevDebouncedFilters = useRef(debouncedFiltersState);
   useEffect(() => {
-    if (prevDebouncedSearch.current === debouncedSearch) return;
-    prevDebouncedSearch.current = debouncedSearch;
-    const normalizedSearch = normalizeSearch(debouncedSearch);
-    const normalizedServerQ = normalizeSearch(serverQ);
-    if (!normalizedSearch.includes(normalizedServerQ)) {
-      // Search is NOT a refinement → need server re-fetch
-      onNavigate({ q: debouncedSearch || undefined, start: startDate || undefined, end: endDate || undefined });
+    if (prevDebouncedFilters.current === debouncedFiltersState) return;
+    prevDebouncedFilters.current = debouncedFiltersState;
+    
+    lastPushedFilters.current = debouncedFiltersState;
+    
+    const parsed = JSON.parse(debouncedFiltersState);
+    const terms: string[] = parsed.q.filter(Boolean);
+    
+    onNavigate({
+      q: terms.length > 0 ? terms : undefined,
+      start: parsed.start || undefined,
+      end: parsed.end || undefined,
+      methods: parsed.methods.length > 0 ? parsed.methods : undefined,
+      fav: parsed.fav || undefined
+    });
+  }, [debouncedFiltersState, onNavigate]);
+
+  // 2. Sync IN from URL (e.g. Back/Forward button, initial mount, or folder change)
+  useEffect(() => {
+    const incomingStateStr = serializeFilters(initialQ, initialStart, initialEnd, initialMethods, initialFav);
+
+    if (lastPushedFilters.current !== null && incomingStateStr === lastPushedFilters.current) {
+      // This URL change is simply the echo of our last explicitly initiated onNavigate. Ignore to avoid focus jumps/overwrites.
+      return;
     }
-  }, [debouncedSearch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Time change → navigate
-  const prevTimeKey = useRef(debouncedTimeKey);
-  useEffect(() => {
-    if (prevTimeKey.current === debouncedTimeKey) return;
-    prevTimeKey.current = debouncedTimeKey;
-    const [start, end] = debouncedTimeKey.split('|');
-    onNavigate({ q: searchTerm || undefined, start: start || undefined, end: end || undefined });
-  }, [debouncedTimeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    setSearchTerms(initialQ.length > 0 ? initialQ : ['']);
+    setStartDate(initialStart);
+    setEndDate(initialEnd);
+    setSelectedMethods(new Set(initialMethods));
+    setShowFavOnly(initialFav);
+    
+    lastPushedFilters.current = incomingStateStr;
+    prevDebouncedFilters.current = incomingStateStr;
+  }, [initialQ, initialStart, initialEnd, initialMethods, initialFav]);
+
+  // Search term helpers
+  const updateTerm = (index: number, value: string) => {
+    setSearchTerms(prev => prev.map((t, i) => i === index ? value : t));
+  };
+  const addTerm = () => {
+    setSearchTerms(prev => [...prev, '']);
+  };
+  const removeTerm = (index: number) => {
+    setSearchTerms(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length === 0 ? [''] : next;
+    });
+  };
 
   // Available methods for pills
   const availableMethods = useMemo(() => {
@@ -115,21 +138,26 @@ export default function RequestList({
 
   // Client-side filtering
   const filteredLogs = useMemo(() => {
+    const activeTerms = searchTerms.filter(Boolean);
     return logs.filter((log) => {
       if (showFavOnly && !favorites.has(log.id)) return false;
       if (selectedMethods.size > 0 && !selectedMethods.has(log.method)) return false;
-      if (searchTerm) {
-        const normalizedSearch = normalizeSearch(searchTerm);
-        const normalizedServerQ = normalizeSearch(serverQ);
-        // Only apply client-side search if it's a refinement of what server already filtered
-        if (normalizedSearch.includes(normalizedServerQ)) {
-          if (!log.directory.toLowerCase().includes(normalizedSearch)) return false;
+      if (activeTerms.length > 0) {
+        // Check if we can filter client-side (all terms refine server terms)
+        const isRefinement = activeTerms.every(term =>
+          serverQ.length === 0 || serverQ.some(sq => normalizeSearch(term).includes(normalizeSearch(sq)))
+        );
+        if (isRefinement) {
+          // OR match: entry must match at least one search term
+          const dirLower = log.directory.toLowerCase();
+          const matched = activeTerms.some(term => dirLower.includes(normalizeSearch(term)));
+          if (!matched) return false;
         }
         // If not a refinement, server navigation is pending — show all current data
       }
       return true;
     });
-  }, [logs, searchTerm, showFavOnly, favorites, selectedMethods, serverQ]);
+  }, [logs, searchTerms, showFavOnly, favorites, selectedMethods, serverQ]);
 
   // Auto-scroll to selected item
   useEffect(() => {
@@ -142,24 +170,50 @@ export default function RequestList({
     <div className="flex flex-col h-full">
       {/* Filter Section */}
       <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 space-y-2">
-        {/* Search */}
-        <div className="relative">
-          <input
-            type="text"
-            placeholder="Search path..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-3 py-2 pr-8 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-sm"
-          />
-          {searchTerm && (
-            <button
-              type="button"
-              onClick={() => setSearchTerm('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm"
-            >
-              &#x2715;
-            </button>
-          )}
+        {/* Search terms */}
+        <div className="space-y-1">
+          {searchTerms.map((term, idx) => (
+            <div key={idx} className="flex gap-1">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  placeholder={idx === 0 ? 'Search path...' : 'OR path...'}
+                  value={term}
+                  onChange={(e) => updateTerm(idx, e.target.value)}
+                  className="w-full px-3 py-1.5 pr-7 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-sm"
+                />
+                {term && (
+                  <button
+                    type="button"
+                    onClick={() => updateTerm(idx, '')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs"
+                  >
+                    &#x2715;
+                  </button>
+                )}
+              </div>
+              {searchTerms.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeTerm(idx)}
+                  className="px-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 text-sm shrink-0"
+                  title="Remove"
+                >
+                  &minus;
+                </button>
+              )}
+              {idx === searchTerms.length - 1 && (
+                <button
+                  type="button"
+                  onClick={addTerm}
+                  className="px-1.5 text-gray-400 hover:text-green-600 dark:hover:text-green-400 text-sm shrink-0"
+                  title="Add search term"
+                >
+                  +
+                </button>
+              )}
+            </div>
+          ))}
         </div>
 
         {/* Method pills */}

@@ -20,15 +20,16 @@ export default async function Home({
   const startTime = startStr ? new Date(startStr).getTime() : undefined;
   const endTime = endStr ? new Date(endStr).getTime() : undefined;
 
-  // Parse search
-  const q = typeof params.q === 'string' ? params.q : undefined;
+  // Parse search (supports multiple q params)
+  const qRaw = params.q;
+  const qArray = Array.isArray(qRaw) ? qRaw.filter(Boolean) : typeof qRaw === 'string' && qRaw ? [qRaw] : [];
 
   // Fetch logs on the server
   const logs = await getLogEntries(
     isNaN(startTime as number) ? undefined : startTime,
     isNaN(endTime as number) ? undefined : endTime,
     currentDir,
-    q,
+    qArray.length > 0 ? qArray : undefined,
   );
 
   return (
@@ -37,7 +38,7 @@ export default async function Home({
         logDirs={logDirs}
         initialLogs={logs}
         initialDir={currentDir}
-        serverQ={q || ''}
+        serverQ={qArray}
       />
     </Suspense>
   );

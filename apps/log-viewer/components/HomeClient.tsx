@@ -27,7 +27,7 @@ interface HomeClientProps {
   logDirs: LogDir[];
   initialLogs: LogEntry[];
   initialDir: string;
-  serverQ: string;
+  serverQ: string[];
 }
 
 export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }: HomeClientProps) {
@@ -43,7 +43,7 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
   const currentDir = initialDir;
 
   // Read filter state from URL for initial values
-  const urlQ = searchParams.get('q') || '';
+  const urlQ = searchParams.getAll('q').filter(Boolean);
   const urlStart = searchParams.get('start') || '';
   const urlEnd = searchParams.get('end') || '';
   const urlFav = searchParams.get('fav') === '1';
@@ -103,18 +103,29 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
   };
 
   // Navigate: triggers server re-render for new data
-  const handleNavigate = useCallback((navParams: { q?: string; start?: string; end?: string }) => {
-    setSelectedId(undefined);
-    setSelectedLog(null);
+  const handleNavigate = useCallback((navParams: { q?: string[]; start?: string; end?: string; methods?: string[]; fav?: boolean }) => {
+    // Only clear selected if search/time changed significantly
+    // Actually, maybe don't clear selected log unless it's missing from new results, but for simplicity:
+    
     const urlParams = new URLSearchParams();
     if (currentDir) urlParams.set('dir', currentDir);
-    if (navParams.q) urlParams.set('q', navParams.q);
+    if (navParams.q) {
+      for (const term of navParams.q) {
+        if (term) urlParams.append('q', term);
+      }
+    }
     if (navParams.start) urlParams.set('start', navParams.start);
     if (navParams.end) urlParams.set('end', navParams.end);
+    if (navParams.methods && navParams.methods.length > 0) {
+      urlParams.set('methods', navParams.methods.join(','));
+    }
+    if (navParams.fav) urlParams.set('fav', '1');
+    if (selectedId) urlParams.set('log', selectedId);
+
     startTransition(() => {
       router.push(urlParams.toString() ? `?${urlParams.toString()}` : '/', { scroll: false });
     });
-  }, [currentDir, router, startTransition]);
+  }, [currentDir, router, startTransition, selectedId]);
 
   const handleDirChange = (dirName: string) => {
     setSelectedId(undefined);
@@ -186,6 +197,7 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
             isDark={isDark}
             isFavorite={selectedId ? favorites.has(selectedId) : false}
             onToggleFavorite={selectedId ? () => handleToggleFavorite(selectedId) : undefined}
+            currentDir={currentDir}
           />
         )}
       </div>

@@ -13,8 +13,8 @@ export interface ParsedSSE {
 
 export function parseSSEStream(streamText: string): string {
   const lines = streamText.split('\n');
-  // Store content blocks by index
-  const contentBlocks: Record<number, string[]> = {};
+  // Store content blocks by id
+  const contentBlocks: Record<string, string[]> = {};
 
   for (const line of lines) {
     if (line.startsWith('data: ')) {
@@ -26,7 +26,7 @@ export function parseSSEStream(streamText: string): string {
 
         // Claude format: content_block_delta with delta.text or delta.thinking
         if (data.type === 'content_block_delta') {
-          const index = data.index ?? 0;
+          const index = `claude_${data.index ?? 0}`;
           const text = data.delta?.text ?? data.delta?.thinking;
           if (text) {
             if (!contentBlocks[index]) {
@@ -36,16 +36,18 @@ export function parseSSEStream(streamText: string): string {
           }
         }
 
-        // OpenAI format: choices[].delta.content
+        // OpenAI format: choices[].delta.content or reasoning_text
         if (data.choices) {
           for (const choice of data.choices) {
-            const index = choice.index ?? 0;
-            const content = choice.delta?.content;
-            if (content) {
-              if (!contentBlocks[index]) {
-                contentBlocks[index] = [];
-              }
-              contentBlocks[index].push(content);
+            if (choice.delta?.reasoning_text) {
+               const index = `openai_${choice.index ?? 0}_think`;
+               if (!contentBlocks[index]) contentBlocks[index] = [];
+               contentBlocks[index].push(choice.delta.reasoning_text);
+            }
+            if (choice.delta?.content) {
+               const index = `openai_${choice.index ?? 0}_content`;
+               if (!contentBlocks[index]) contentBlocks[index] = [];
+               contentBlocks[index].push(choice.delta.content);
             }
           }
         }
@@ -55,12 +57,11 @@ export function parseSSEStream(streamText: string): string {
     }
   }
 
-  // Combine all content blocks in order
+  // Combine all content blocks in order of creation (roughly maintaining object insertion order which isn't perfect, but keys will be generated sequentially)
   const allText: string[] = [];
-  const sortedIndexes = Object.keys(contentBlocks).map(Number).sort((a, b) => a - b);
-
-  for (const index of sortedIndexes) {
-    const blockText = contentBlocks[index].join('');
+  const sortedKeys = Object.keys(contentBlocks).sort(); // simple sorted by block identifier
+  for (const key of sortedKeys) {
+    const blockText = contentBlocks[key].join('');
     if (blockText) {
       allText.push(blockText);
     }
@@ -72,8 +73,9 @@ export function parseSSEStream(streamText: string): string {
 export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
   const lines = streamText.split('\n');
   const events: any[] = [];
-  // Store content blocks by index for summary
-  const contentBlocks: Record<number, { type: string; text: string; name?: string; model?: string }> = {};
+  
+  // Store content blocks by ID
+  const contentBlocks: Record<string, { type: string; text: string; name?: string; model?: string }> = {};
 
   for (const line of lines) {
     if (line.startsWith('event: ')) {
@@ -92,12 +94,12 @@ export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
 
           // ── Claude format ──
           if (data.type === 'content_block_start') {
-            const index = data.index ?? 0;
+            const index = `claude_${data.index ?? 0}`;
             const blockType = data.content_block?.type || 'unknown';
             const toolName = data.content_block?.name;
             contentBlocks[index] = { type: blockType, text: '', name: toolName };
           } else if (data.type === 'content_block_delta') {
-            const index = data.index ?? 0;
+            const index = `claude_${data.index ?? 0}`;
             if (data.delta?.text) {
               if (!contentBlocks[index]) {
                 contentBlocks[index] = { type: 'text', text: '' };
@@ -120,18 +122,39 @@ export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
           // ── OpenAI format ──
           if (data.choices) {
             for (const choice of data.choices) {
-              const index = choice.index ?? 0;
-              const content = choice.delta?.content;
-              const role = choice.delta?.role;
               const model = data.model;
-              if (!contentBlocks[index]) {
-                contentBlocks[index] = { type: role || 'assistant', text: '', model };
+              const role = choice.delta?.role;
+              
+              if (choice.delta?.reasoning_text) {
+                 const key = `openai_${choice.index ?? 0}_0_think`;
+                 if (!contentBlocks[key]) {
+                    contentBlocks[key] = { type: 'thinking', text: '', model };
+                 }
+                 contentBlocks[key].text += choice.delta.reasoning_text;
               }
-              if (content) {
-                contentBlocks[index].text += content;
+              
+              if (choice.delta?.content) {
+                 const key = `openai_${choice.index ?? 0}_1_content`;
+                 if (!contentBlocks[key]) {
+                    contentBlocks[key] = { type: role || 'assistant', text: '', model };
+                 }
+                 contentBlocks[key].text += choice.delta.content;
               }
-              if (model && !contentBlocks[index].model) {
-                contentBlocks[index].model = model;
+              
+              // Map OpenAI tool_calls
+              if (choice.delta?.tool_calls) {
+                for (const tc of choice.delta.tool_calls) {
+                   const key = `openai_${choice.index ?? 0}_2_tool_${tc.index}`;
+                   if (!contentBlocks[key]) {
+                     contentBlocks[key] = { type: 'tool_use', text: '', name: tc.function?.name, model };
+                   }
+                   if (tc.function?.name && !contentBlocks[key].name) {
+                     contentBlocks[key].name = tc.function.name;
+                   }
+                   if (tc.function?.arguments) {
+                     contentBlocks[key].text += tc.function.arguments;
+                   }
+                }
               }
             }
           }
@@ -144,12 +167,11 @@ export function parseSSEStreamToJSON(streamText: string): ParsedSSE {
 
   // Create summary of content blocks
   const summary: any[] = [];
-  const sortedIndexes = Object.keys(contentBlocks).map(Number).sort((a, b) => a - b);
+  const sortedKeys = Object.keys(contentBlocks).sort(); // Sorts correctly given the 0_think / 1_content / 2_tool sequence
 
-  for (const index of sortedIndexes) {
-    const block = contentBlocks[index];
+  for (const key of sortedKeys) {
+    const block = contentBlocks[key];
     summary.push({
-      index,
       type: block.type,
       content: block.text,
       name: block.name,
