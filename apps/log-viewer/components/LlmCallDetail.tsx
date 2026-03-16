@@ -4,6 +4,7 @@ import { LogDetail } from '@/types/log';
 import { parseSSEStreamToJSON } from '@/lib/sse-parser';
 import JsonViewer from './JsonViewer';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 interface LlmMessage {
   role: string;
@@ -23,23 +24,19 @@ function getRequestBody(log: LogDetail): any {
   return null;
 }
 
-function extractSystemMessage(body: any): string | null {
+function extractSystemMessage(body: any): any[] | null {
   // Try $.system first (Claude format)
   if (body?.system) {
-    if (typeof body.system === 'string') return body.system;
+    if (typeof body.system === 'string') return [body.system];
     if (Array.isArray(body.system)) {
-      return body.system
-        .map((s: any) => typeof s === 'string' ? s : s?.text || JSON.stringify(s))
-        .join('\n');
+      return body.system.length > 0 ? body.system : null;
     }
   }
   // Try $.messages with role=system (OpenAI format)
   if (Array.isArray(body?.messages)) {
     const systemMsgs = body.messages.filter((m: any) => m.role === 'system');
     if (systemMsgs.length > 0) {
-      return systemMsgs
-        .map((m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
-        .join('\n\n');
+      return systemMsgs.map((m: any) => m.content);
     }
   }
   return null;
@@ -64,7 +61,17 @@ function renderContent(content: any, isDark: boolean): React.ReactNode {
       <div className="space-y-4">
         {content.map((part: any, i: number) => {
           if (part.type === 'text') {
-            return <pre key={i} className="whitespace-pre-wrap text-sm leading-relaxed border-none bg-transparent p-0 m-0 font-sans">{part.text}</pre>;
+            return (
+              <div key={i} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-mono px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded">
+                    text [{i}]
+                  </span>
+                  <span className="text-xs text-gray-400">{part.text?.length || 0} chars</span>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm leading-relaxed border-none bg-transparent p-0 m-0 font-sans">{part.text}</pre>
+              </div>
+            );
           }
           if (part.type === 'image_url' || part.type === 'image') {
             return (
@@ -318,6 +325,7 @@ function MessageBubble({ role, children, isResponse }: { role: string; children:
 }
 
 export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
+  const router = useRouter();
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -388,7 +396,13 @@ export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
       {/* Header */}
       <div className="shrink-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-6 py-3 flex items-center gap-4 shadow-sm z-10">
         <button
-          onClick={() => window.history.back()}
+          onClick={() => {
+            if (window.history.length > 1) {
+              router.back();
+            } else {
+              router.push(dir ? `/?dir=${encodeURIComponent(dir)}` : '/');
+            }
+          }}
           className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 flex items-center gap-1 shrink-0 transition-colors bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-md"
         >
           &larr; 返回
@@ -478,11 +492,13 @@ export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
         <div className="flex-1 overflow-y-auto bg-white dark:bg-gray-900">
           <div className="max-w-5xl mx-auto p-8 space-y-6">
             {selectedSection === 'system' && systemMessage && (
-              <MessageBubble role="system">
-                <pre className="whitespace-pre-wrap text-sm leading-relaxed font-sans">
-                  {systemMessage}
-                </pre>
-              </MessageBubble>
+              <div className="space-y-6">
+                {systemMessage.map((msg, idx) => (
+                  <MessageBubble key={idx} role="system">
+                    {renderContent(typeof msg === 'string' ? msg : (Array.isArray(msg) ? msg : [msg]), isDark)}
+                  </MessageBubble>
+                ))}
+              </div>
             )}
 
             {selectedSection === 'tools' && tools && (
@@ -503,9 +519,9 @@ export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
                         </span>
                       </div>
                       {(tool.description || tool.function?.description) && (
-                        <div className="mt-3 text-sm text-gray-600 dark:text-gray-300 leading-relaxed max-w-3xl">
+                        <pre className="mt-3 text-sm text-gray-600 dark:text-gray-300 leading-relaxed whitespace-pre-wrap w-full">
                           {tool.description || tool.function?.description}
-                        </div>
+                        </pre>
                       )}
                     </div>
                     <div className="p-5">
@@ -521,10 +537,27 @@ export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
 
             {typeof selectedSection === 'number' && turns[selectedSection] && (
               <div className="py-2">
-                <div className="border-b border-gray-200 dark:border-gray-700 pb-4 mb-6">
+                <div className="border-b border-gray-200 dark:border-gray-700 pb-4 mb-6 flex items-center justify-between">
                   <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                     Turn {selectedSection + 1}
+                    <span className="text-sm font-normal text-gray-500">/ {turns.length}</span>
                   </h2>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedSection(prev => typeof prev === 'number' ? prev - 1 : prev)}
+                      disabled={selectedSection === 0}
+                      className="px-3 py-1.5 text-sm font-medium rounded-md transition-colors border border-gray-300 dark:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                    >
+                      &larr; 上一个
+                    </button>
+                    <button
+                      onClick={() => setSelectedSection(prev => typeof prev === 'number' ? prev + 1 : prev)}
+                      disabled={selectedSection === turns.length - 1}
+                      className="px-3 py-1.5 text-sm font-medium rounded-md transition-colors border border-gray-300 dark:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                    >
+                      下一个 &rarr;
+                    </button>
+                  </div>
                 </div>
                 {turns[selectedSection].messages.map((msg, idx) => (
                   <MessageBubble key={idx} role={msg.role} isResponse={msg.isResponse}>
@@ -534,6 +567,26 @@ export default function LlmCallDetail({ log, dir }: LlmCallDetailProps) {
                     }
                   </MessageBubble>
                 ))}
+                {/* Bottom navigation */}
+                <div className="flex items-center justify-between pt-6 mt-6 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    onClick={() => setSelectedSection(prev => typeof prev === 'number' ? prev - 1 : prev)}
+                    disabled={selectedSection === 0}
+                    className="px-4 py-2 text-sm font-medium rounded-md transition-colors border border-gray-300 dark:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  >
+                    &larr; 上一个 Turn
+                  </button>
+                  <span className="text-sm text-gray-500">
+                    Turn {selectedSection + 1} / {turns.length}
+                  </span>
+                  <button
+                    onClick={() => setSelectedSection(prev => typeof prev === 'number' ? prev + 1 : prev)}
+                    disabled={selectedSection === turns.length - 1}
+                    className="px-4 py-2 text-sm font-medium rounded-md transition-colors border border-gray-300 dark:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  >
+                    下一个 Turn &rarr;
+                  </button>
+                </div>
               </div>
             )}
           </div>

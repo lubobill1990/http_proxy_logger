@@ -22,7 +22,7 @@ interface RequestListProps {
   selectedId?: string;
   onSelect: (id: string) => void;
   onNavigate: (params: { q?: string[]; start?: string; end?: string; methods?: string[]; fav?: boolean }) => void;
-  favorites: Set<string>;
+  favorites: Map<string, string>;
   serverQ: string[];
   initialQ?: string[];
   initialStart?: string;
@@ -53,11 +53,11 @@ export default function RequestList({
   const [selectedMethods, setSelectedMethods] = useState<Set<string>>(new Set(initialMethods));
   const selectedRef = useRef<HTMLButtonElement>(null);
 
-  // Helper to serialize filter state uniformly
+  // Helper to serialize filter state uniformly for comparison.
+  // Always normalize empty search to [] so URL round-trip (no q param -> []) matches local clear ([''] -> filter(Boolean) -> []).
   const serializeFilters = (q: string[], start: string, end: string, methods: string[], fav: boolean) => {
-    const validQ = q.filter(Boolean);
     return JSON.stringify({
-      q: validQ.length > 0 ? validQ : [''],
+      q: q.filter(Boolean).sort(),
       start,
       end,
       methods: Array.from(methods).sort(),
@@ -69,17 +69,23 @@ export default function RequestList({
   const debouncedFiltersState = useDebounce(filtersState, 800);
   const lastPushedFilters = useRef<string | null>(null);
 
+  // Track whether we are the source of the current URL change, to avoid echo-back overwrites.
+  // Use a Set to handle rapid successive pushes where multiple echoes may arrive.
+  const pendingPushes = useRef<Set<string>>(new Set());
+
   // 1. Sync OUT to URL on user interaction (debounced)
   const prevDebouncedFilters = useRef(debouncedFiltersState);
   useEffect(() => {
     if (prevDebouncedFilters.current === debouncedFiltersState) return;
     prevDebouncedFilters.current = debouncedFiltersState;
-    
+
+    // Mark this as a push we initiated so the sync-IN effect ignores the echo
+    pendingPushes.current.add(debouncedFiltersState);
     lastPushedFilters.current = debouncedFiltersState;
-    
+
     const parsed = JSON.parse(debouncedFiltersState);
-    const terms: string[] = parsed.q.filter(Boolean);
-    
+    const terms: string[] = parsed.q;
+
     onNavigate({
       q: terms.length > 0 ? terms : undefined,
       start: parsed.start || undefined,
@@ -90,23 +96,34 @@ export default function RequestList({
   }, [debouncedFiltersState, onNavigate]);
 
   // 2. Sync IN from URL (e.g. Back/Forward button, initial mount, or folder change)
+  // Memoize the incoming URL state string to avoid re-running on every render
+  // (initialQ is a new array reference each render).
+  const incomingStateStr = serializeFilters(initialQ, initialStart, initialEnd, initialMethods, initialFav);
+  const prevIncomingState = useRef(incomingStateStr);
   useEffect(() => {
-    const incomingStateStr = serializeFilters(initialQ, initialStart, initialEnd, initialMethods, initialFav);
+    // Skip if nothing actually changed from the URL side
+    if (prevIncomingState.current === incomingStateStr) return;
+    prevIncomingState.current = incomingStateStr;
 
-    if (lastPushedFilters.current !== null && incomingStateStr === lastPushedFilters.current) {
-      // This URL change is simply the echo of our last explicitly initiated onNavigate. Ignore to avoid focus jumps/overwrites.
+    // If this URL change is the echo of a push we initiated, just consume & ignore it
+    if (pendingPushes.current.has(incomingStateStr)) {
+      pendingPushes.current.delete(incomingStateStr);
+      return;
+    }
+    // Also ignore if it matches the last thing we pushed (covers transition intermediate states)
+    if (lastPushedFilters.current === incomingStateStr) {
       return;
     }
 
+    // Genuine external change (browser back/forward, folder switch, etc.)
     setSearchTerms(initialQ.length > 0 ? initialQ : ['']);
     setStartDate(initialStart);
     setEndDate(initialEnd);
     setSelectedMethods(new Set(initialMethods));
     setShowFavOnly(initialFav);
-    
-    lastPushedFilters.current = incomingStateStr;
+
     prevDebouncedFilters.current = incomingStateStr;
-  }, [initialQ, initialStart, initialEnd, initialMethods, initialFav]);
+  }, [incomingStateStr, initialQ, initialStart, initialEnd, initialMethods, initialFav]);
 
   // Search term helpers
   const updateTerm = (index: number, value: string) => {
@@ -307,7 +324,7 @@ export default function RequestList({
               >
                 <div className="flex items-center gap-2 mb-0.5">
                   {favorites.has(log.id) && (
-                    <span className="text-yellow-500 text-xs">&#9733;</span>
+                    <span className="text-yellow-500 text-xs" title={favorites.get(log.id) || undefined}>&#9733;{favorites.get(log.id) ? ` ${favorites.get(log.id)}` : ''}</span>
                   )}
                   <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     {format(new Date(log.timestamp), 'HH:mm:ss')}

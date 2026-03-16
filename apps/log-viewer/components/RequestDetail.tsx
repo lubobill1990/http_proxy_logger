@@ -4,13 +4,87 @@ import { LogDetail } from '@/types/log';
 import { format } from 'date-fns';
 import { isSSEResponse, parseSSEStreamToJSON, ParsedSSE, SSEContentBlock } from '@/lib/sse-parser';
 import JsonViewer from './JsonViewer';
+import { useState, useRef, useEffect } from 'react';
 
 interface RequestDetailProps {
   log: LogDetail | null;
   isDark?: boolean;
   isFavorite?: boolean;
-  onToggleFavorite?: () => void;
+  onToggleFavorite?: (title?: string) => void;
   currentDir?: string;
+}
+
+function FavoriteDialog({ onConfirm }: { onConfirm: (title: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [open]);
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (dialogRef.current && !dialogRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setTitle('');
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  const handleSubmit = () => {
+    onConfirm(title.trim());
+    setOpen(false);
+    setTitle('');
+  };
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen(true)}
+        className="px-3 py-1 text-sm font-medium rounded-md transition-colors bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 hover:text-yellow-700 dark:hover:text-yellow-300 hover:border-yellow-300 dark:hover:border-yellow-700"
+      >
+        &#9734; 收藏
+      </button>
+      {open && (
+        <div ref={dialogRef} className="absolute right-0 top-full mt-2 z-50 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-600 p-4 w-72">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
+            添加收藏
+          </h3>
+          <input
+            ref={inputRef}
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); if (e.key === 'Escape') { setOpen(false); setTitle(''); } }}
+            placeholder="输入标题 (可选)"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 mb-3"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setOpen(false); setTitle(''); }}
+              className="px-3 py-1.5 text-sm rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleSubmit}
+              className="px-3 py-1.5 text-sm rounded-md bg-yellow-500 text-white hover:bg-yellow-600 font-medium"
+            >
+              确认收藏
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function RequestDetail({ log, isDark = false, isFavorite = false, onToggleFavorite, currentDir }: RequestDetailProps) {
@@ -39,7 +113,7 @@ export default function RequestDetail({ log, isDark = false, isFavorite = false,
   })();
 
   const llmUrl = isLlmCall
-    ? `/llm/${encodeURIComponent(log.minuteDirectory)}/${encodeURIComponent(log.directory)}${currentDir ? `?dir=${encodeURIComponent(currentDir)}` : ''}`
+    ? `/llm/${encodeURIComponent(log.minuteDirectory)}/${log.directory}${currentDir ? `?dir=${encodeURIComponent(currentDir)}` : ''}`
     : null;
 
   const renderBody = (
@@ -163,17 +237,16 @@ export default function RequestDetail({ log, isDark = false, isFavorite = false,
           </span>
           <span className="text-sm font-mono break-all flex-1">{log.path ? '/' + decodeURIComponent(log.path) : '/'}</span>
           {onToggleFavorite && (
-            <button
-              onClick={onToggleFavorite}
-              className={`shrink-0 text-xl leading-none px-1 transition-colors ${
-                isFavorite
-                  ? 'text-yellow-500 hover:text-yellow-600'
-                  : 'text-gray-300 dark:text-gray-600 hover:text-yellow-400'
-              }`}
-              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-            >
-              {isFavorite ? '\u2605' : '\u2606'}
-            </button>
+            isFavorite ? (
+              <button
+                onClick={() => onToggleFavorite()}
+                className="shrink-0 px-3 py-1 text-sm font-medium rounded-md transition-colors bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700 hover:bg-yellow-200 dark:hover:bg-yellow-900/50"
+              >
+                &#9733; 已收藏
+              </button>
+            ) : (
+              <FavoriteDialog onConfirm={(title) => onToggleFavorite(title)} />
+            )
           )}
         </div>
         <div className="text-xs text-gray-500 dark:text-gray-400">

@@ -11,16 +11,25 @@ interface LogDir {
   path: string;
 }
 
-// Favorites stored in localStorage keyed by dir name
-function getFavorites(dir: string): Set<string> {
+// Favorites stored in localStorage keyed by dir name, as a map of logId -> title
+function getFavorites(dir: string): Map<string, string> {
   try {
     const raw = localStorage.getItem(`favorites:${dir}`);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch { return new Set(); }
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw);
+    // Support legacy format (array of strings) -> migrate to map
+    if (Array.isArray(parsed)) {
+      const map = new Map<string, string>();
+      for (const id of parsed) map.set(id, '');
+      return map;
+    }
+    // New format: object { id: title }
+    return new Map(Object.entries(parsed));
+  } catch { return new Map(); }
 }
 
-function saveFavorites(dir: string, favs: Set<string>) {
-  localStorage.setItem(`favorites:${dir}`, JSON.stringify([...favs]));
+function saveFavorites(dir: string, favs: Map<string, string>) {
+  localStorage.setItem(`favorites:${dir}`, JSON.stringify(Object.fromEntries(favs)));
 }
 
 interface HomeClientProps {
@@ -38,7 +47,7 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [isDark, setIsDark] = useState(false);
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [favorites, setFavorites] = useState<Map<string, string>>(new Map());
 
   const currentDir = initialDir;
 
@@ -135,10 +144,14 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
     });
   };
 
-  const handleToggleFavorite = (logId: string) => {
+  const handleToggleFavorite = (logId: string, title?: string) => {
     setFavorites(prev => {
-      const next = new Set(prev);
-      next.has(logId) ? next.delete(logId) : next.add(logId);
+      const next = new Map(prev);
+      if (next.has(logId)) {
+        next.delete(logId);
+      } else {
+        next.set(logId, title || '');
+      }
       saveFavorites(currentDir, next);
       return next;
     });
@@ -196,7 +209,7 @@ export default function HomeClient({ logDirs, initialLogs, initialDir, serverQ }
             log={selectedLog}
             isDark={isDark}
             isFavorite={selectedId ? favorites.has(selectedId) : false}
-            onToggleFavorite={selectedId ? () => handleToggleFavorite(selectedId) : undefined}
+            onToggleFavorite={selectedId ? (title?: string) => handleToggleFavorite(selectedId, title) : undefined}
             currentDir={currentDir}
           />
         )}

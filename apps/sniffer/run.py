@@ -212,20 +212,9 @@ def get_minute_directory(log_dir: Path) -> Path:
 
 
 def get_request_directory(log_dir: Path, method: str, url_path: str) -> Path:
+    import urllib.parse
     timestamp = int(time.time() * 1000)
-    safe_path = (
-        url_path.lstrip("/")
-        .replace("/", "%2F")
-        .replace("\\", "_")
-        .replace(":", "_")
-        .replace("*", "_")
-        .replace("?", "_")
-        .replace('"', "_")
-        .replace("<", "_")
-        .replace(">", "_")
-        .replace("|", "_")[:200]
-        or "root"
-    )
+    safe_path = urllib.parse.quote(url_path.lstrip("/"), safe="")[:200] or "root"
     dir_name = f"{timestamp}_{method}_{safe_path}"
     minute_dir = get_minute_directory(log_dir)
     req_dir = minute_dir / dir_name

@@ -55,11 +55,7 @@ function getMinuteDirectory(): string {
  */
 function getRequestDirectory(method: string, urlPath: string): string {
   const timestamp = new Date().getTime();
-  const safePath = urlPath
-    .replace(/^\//, '')
-    .replace(/\//g, '%2F')
-    .replace(/[\\:*?"<>|]/g, '_')
-    .substring(0, 200) || 'root';
+  const safePath = encodeURIComponent(urlPath.replace(/^\//, '')).substring(0, 200) || 'root';
 
   const dirName = `${timestamp}_${method}_${safePath}`;
   const minuteDir = getMinuteDirectory();
